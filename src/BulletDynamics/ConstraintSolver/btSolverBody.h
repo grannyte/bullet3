@@ -24,12 +24,11 @@ class btRigidBody;
 #include "LinearMath/btTransformUtil.h"
 
 ///Until we get other contributions, only use SIMD on Windows, when using Visual Studio 2008 or later, and not double precision
-#ifdef BT_USE_SSE
+#if defined (BT_USE_SSE) || defined (BT_USE_AVX)
 #define USE_SIMD 1
-#endif  //
+#endif 
 
-#ifdef USE_SIMD
-
+#if defined (BT_USE_SSE) && defined(USE_SIMD)
 struct btSimdScalar
 {
 	SIMD_FORCE_INLINE btSimdScalar()
@@ -95,13 +94,82 @@ operator+(const btSimdScalar& v1, const btSimdScalar& v2)
 	return btSimdScalar(_mm_add_ps(v1.get128(), v2.get128()));
 }
 
+#elif defined (BT_USE_AVX) && defined(USE_SIMD)
+
+struct	btSimdScalar
+{
+	SIMD_FORCE_INLINE	btSimdScalar()
+	{
+
+	}
+
+	SIMD_FORCE_INLINE	btSimdScalar(double	fl)
+		:m_vec128(_mm256_set1_pd(fl))
+	{
+	}
+
+	SIMD_FORCE_INLINE	btSimdScalar(__m256d v128)
+		: m_vec128(v128)
+	{
+	}
+	union
+	{
+		__m256d			m_vec128;
+		double			m_floats[4];
+		long long int	m_ints[4];
+		btScalar		m_unusedPadding;
+	};
+	SIMD_FORCE_INLINE	__m256d	get128()
+	{
+		return m_vec128;
+	}
+
+	SIMD_FORCE_INLINE	const __m256d get128() const
+	{
+		return m_vec128;
+	}
+
+	SIMD_FORCE_INLINE	void set128(__m256d v128)
+	{
+		m_vec128 = v128;
+	}
+
+	SIMD_FORCE_INLINE	operator __m256d()
+	{
+		return m_vec128;
+	}
+	SIMD_FORCE_INLINE	operator const __m256d() const
+	{
+		return m_vec128;
+	}
+
+	SIMD_FORCE_INLINE	operator double() const
+	{
+		return m_floats[0];
+	}
+
+};
+
+///@brief Return the elementwise product of two btSimdScalar
+SIMD_FORCE_INLINE btSimdScalar
+operator*(const btSimdScalar& v1, const btSimdScalar& v2)
+{
+	return btSimdScalar(_mm256_mul_pd(v1.get128(), v2.get128()));
+}
+
+///@brief Return the elementwise product of two btSimdScalar
+SIMD_FORCE_INLINE btSimdScalar
+operator+(const btSimdScalar& v1, const btSimdScalar& v2)
+{
+	return btSimdScalar(_mm256_add_pd(v1.get128(), v2.get128()));
+}
+
 #else
 #define btSimdScalar btScalar
 #endif
 
 ///The btSolverBody is an internal datastructure for the constraint solver. Only necessary data is packed to increase cache coherence/performance.
-ATTRIBUTE_ALIGNED16(struct)
-btSolverBody
+ATTRIBUTE_ALIGNED_DEFAULT (struct)	btSolverBody
 {
 	BT_DECLARE_ALIGNED_ALLOCATOR();
 	btTransform m_worldTransform;

@@ -37,10 +37,10 @@ static DBVT_INLINE int indexof(const btDbvtNode* node)
 static DBVT_INLINE btDbvtVolume merge(const btDbvtVolume& a,
 									  const btDbvtVolume& b)
 {
-#ifdef BT_USE_SSE
-	ATTRIBUTE_ALIGNED16(char locals[sizeof(btDbvtAabbMm)]);
-	btDbvtVolume* ptr = (btDbvtVolume*)locals;
-	btDbvtVolume& res = *ptr;
+#if (DBVT_MERGE_IMPL==DBVT_IMPL_SSE)
+	ATTRIBUTE_ALIGNED_DEFAULT( char locals[sizeof(btDbvtAabbMm)]);
+	btDbvtVolume* ptr = (btDbvtVolume*) locals;
+	btDbvtVolume&	res=*ptr;
 #else
 	btDbvtVolume res;
 #endif
@@ -299,11 +299,11 @@ static int split(btDbvtNode** leaves,
 static btDbvtVolume bounds(btDbvtNode** leaves,
 						   int count)
 {
-#ifdef BT_USE_SSE
-	ATTRIBUTE_ALIGNED16(char locals[sizeof(btDbvtVolume)]);
-	btDbvtVolume* ptr = (btDbvtVolume*)locals;
-	btDbvtVolume& volume = *ptr;
-	volume = leaves[0]->volume;
+#if DBVT_MERGE_IMPL==DBVT_IMPL_SSE
+	ATTRIBUTE_ALIGNED_DEFAULT(char	locals[sizeof(btDbvtVolume)]);
+	btDbvtVolume* ptr = (btDbvtVolume*) locals;
+	btDbvtVolume&	volume=*ptr;
+	volume=leaves[0]->volume;
 #else
 	btDbvtVolume volume = leaves[0]->volume;
 #endif

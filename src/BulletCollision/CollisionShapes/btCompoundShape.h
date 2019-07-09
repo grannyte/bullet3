@@ -27,8 +27,7 @@ subject to the following restrictions:
 //class btOptimizedBvh;
 struct btDbvt;
 
-ATTRIBUTE_ALIGNED16(struct)
-btCompoundShapeChild
+ATTRIBUTE_ALIGNED_DEFAULT(struct) btCompoundShapeChild
 {
 	BT_DECLARE_ALIGNED_ALLOCATOR();
 
@@ -52,8 +51,7 @@ SIMD_FORCE_INLINE bool operator==(const btCompoundShapeChild& c1, const btCompou
 /// It has an (optional) dynamic aabb tree to accelerate early rejection tests.
 /// @todo: This aabb tree can also be use to speed up ray tests on btCompoundShape, see http://code.google.com/p/bullet/issues/detail?id=25
 /// Currently, removal of child shapes is only supported when disabling the aabb tree (pass 'false' in the constructor of btCompoundShape)
-ATTRIBUTE_ALIGNED16(class)
-btCompoundShape : public btCollisionShape
+ATTRIBUTE_ALIGNED_DEFAULT(class) btCompoundShape	: public btCollisionShape
 {
 protected:
 	btAlignedObjectArray<btCompoundShapeChild> m_children;

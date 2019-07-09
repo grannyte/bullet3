@@ -35,7 +35,8 @@ typedef float float4 __attribute__((vector_size(16)));
 #endif
 //typedef  uint32_t uint4 __attribute__ ((vector_size(16)));
 
-#if defined BT_USE_SSE || defined _WIN32
+/* TODO_AVX */
+#if defined BT_USE_SSE || (defined (_WIN32) && !defined(BT_USE_AVX))
 
 #define LOG2_ARRAY_SIZE 6
 #define STACK_ARRAY_COUNT (1UL << LOG2_ARRAY_SIZE)
@@ -827,6 +828,9 @@ long _mindot_large(const float *vv, const float *vec, unsigned long count, float
 	_mm_store_ss(dotResult, dotmin);
 	return minIndex;
 }
+
+/* TODO_AVX*/
+#elif defined BT_USE_AVX
 
 #elif defined BT_USE_NEON
 

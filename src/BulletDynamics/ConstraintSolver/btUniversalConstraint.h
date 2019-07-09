@@ -27,8 +27,7 @@ subject to the following restrictions:
 /// "Given axis 1 on body 1, and axis 2 on body 2 that is perpendicular to axis 1, it keeps them perpendicular.
 /// In other words, rotation of the two bodies about the direction perpendicular to the two axes will be equal."
 
-ATTRIBUTE_ALIGNED16(class)
-btUniversalConstraint : public btGeneric6DofConstraint
+ATTRIBUTE_ALIGNED_DEFAULT(class) btUniversalConstraint : public btGeneric6DofConstraint
 {
 protected:
 	btVector3 m_anchor;

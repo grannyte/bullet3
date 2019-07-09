@@ -25,8 +25,7 @@ class btMultiBodyConstraint;
 #include "BulletDynamics/ConstraintSolver/btContactSolverInfo.h"
 
 ///1D constraint along a normal axis between bodyA and bodyB. It can be combined to solve contact and friction constraints.
-ATTRIBUTE_ALIGNED16(struct)
-btMultiBodySolverConstraint
+ATTRIBUTE_ALIGNED_DEFAULT (struct)	btMultiBodySolverConstraint
 {
 	BT_DECLARE_ALIGNED_ALLOCATOR();
 

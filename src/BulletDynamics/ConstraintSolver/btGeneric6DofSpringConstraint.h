@@ -38,8 +38,7 @@ subject to the following restrictions:
 /// 4 : rotation Y (2nd Euler rotational around new position of Y axis, range [-PI/2+epsilon, PI/2-epsilon] )
 /// 5 : rotation Z (1st Euler rotational around Z axis, range [-PI+epsilon, PI-epsilon] )
 
-ATTRIBUTE_ALIGNED16(class)
-btGeneric6DofSpringConstraint : public btGeneric6DofConstraint
+ATTRIBUTE_ALIGNED_DEFAULT(class) btGeneric6DofSpringConstraint : public btGeneric6DofConstraint
 {
 protected:
 	bool m_springEnabled[6];

@@ -209,8 +209,7 @@ void myParallelIslandDispatch(btAlignedObjectArray<btSimulationIslandManagerMt::
 ///
 /// MyDiscreteDynamicsWorld -- subclassed for profiling purposes
 ///
-ATTRIBUTE_ALIGNED16(class)
-MyDiscreteDynamicsWorld : public btDiscreteDynamicsWorldMt
+ATTRIBUTE_ALIGNED_DEFAULT( class ) MyDiscreteDynamicsWorld : public btDiscreteDynamicsWorldMt
 {
 	typedef btDiscreteDynamicsWorldMt ParentClass;
 

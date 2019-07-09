@@ -22,8 +22,7 @@ subject to the following restrictions:
 #include "LinearMath/btQuaternion.h"
 
 ///This 4x4 matrix class is extremely limited, just created for the purpose of accumulating transform matrices in COLLADA .dae files
-ATTRIBUTE_ALIGNED16(class)
-btMatrix4x4
+ATTRIBUTE_ALIGNED_DEFAULT(class) btMatrix4x4
 {
 	btVector4 m_el[4];
 

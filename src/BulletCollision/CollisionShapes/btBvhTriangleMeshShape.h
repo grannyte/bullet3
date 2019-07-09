@@ -31,8 +31,7 @@ subject to the following restrictions:
 ///It takes a triangle mesh as input, for example a btTriangleMesh or btTriangleIndexVertexArray. The btBvhTriangleMeshShape class allows for triangle mesh deformations by a refit or partialRefit method.
 ///Instead of building the bounding volume hierarchy acceleration structure, it is also possible to serialize (save) and deserialize (load) the structure from disk.
 ///See Demos\ConcaveDemo\ConcavePhysicsDemo.cpp for an example.
-ATTRIBUTE_ALIGNED16(class)
-btBvhTriangleMeshShape : public btTriangleMeshShape
+ATTRIBUTE_ALIGNED_DEFAULT(class) btBvhTriangleMeshShape : public btTriangleMeshShape
 {
 	btOptimizedBvh* m_bvh;
 	btTriangleInfoMap* m_triangleInfoMap;

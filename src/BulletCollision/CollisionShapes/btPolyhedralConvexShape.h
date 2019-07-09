@@ -21,8 +21,7 @@ subject to the following restrictions:
 class btConvexPolyhedron;
 
 ///The btPolyhedralConvexShape is an internal interface class for polyhedral convex shapes.
-ATTRIBUTE_ALIGNED16(class)
-btPolyhedralConvexShape : public btConvexInternalShape
+ATTRIBUTE_ALIGNED_DEFAULT(class) btPolyhedralConvexShape : public btConvexInternalShape
 {
 protected:
 	btConvexPolyhedron* m_polyhedron;

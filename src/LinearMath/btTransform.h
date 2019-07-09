@@ -25,10 +25,9 @@ subject to the following restrictions:
 
 /**@brief The btTransform class supports rigid transforms with only translation and rotation and no scaling/shear.
  *It can be used in combination with btVector3, btQuaternion and btMatrix3x3 linear algebra classes. */
-ATTRIBUTE_ALIGNED16(class)
-btTransform
-{
-	///Storage for the rotation
+ATTRIBUTE_ALIGNED_DEFAULT(class) btTransform {
+	
+  ///Storage for the rotation
 	btMatrix3x3 m_basis;
 	///Storage for the translation
 	btVector3 m_origin;

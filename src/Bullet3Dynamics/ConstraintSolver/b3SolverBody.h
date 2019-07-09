@@ -23,12 +23,11 @@ subject to the following restrictions:
 #include "Bullet3Common/b3TransformUtil.h"
 
 ///Until we get other contributions, only use SIMD on Windows, when using Visual Studio 2008 or later, and not double precision
-#ifdef B3_USE_SSE
-#define USE_SIMD 1
-#endif  //
+//#if defined (B3_USE_SSE) || defined (B3_USE_AVX)
+//#define USE_SIMD 1
+//#endif //
 
-#ifdef USE_SIMD
-
+#if defined(B3_USE_SSE)
 struct b3SimdScalar
 {
 	B3_FORCE_INLINE b3SimdScalar()
@@ -95,6 +94,76 @@ operator+(const b3SimdScalar& v1, const b3SimdScalar& v2)
 	return b3SimdScalar(_mm_add_ps(v1.get128(), v2.get128()));
 }
 
+#elif defined(B3_USE_AVX)
+
+struct	b3SimdScalar
+{
+	B3_FORCE_INLINE	b3SimdScalar()
+	{
+
+	}
+
+	B3_FORCE_INLINE	b3SimdScalar(double	fl)
+		:m_vec128(_mm256_set1_pd(fl))
+	{
+	}
+
+	B3_FORCE_INLINE	b3SimdScalar(__m256d v128)
+		: m_vec128(v128)
+	{
+	}
+	union
+	{
+		__m256d			m_vec128;
+		double			m_floats[4];
+		double			x, y, z, w;
+		long long int	m_ints[4];
+		b3Scalar		m_unusedPadding;
+	};
+	B3_FORCE_INLINE	__m256d	get128()
+	{
+		return m_vec128;
+	}
+
+	B3_FORCE_INLINE	const __m256d	get128() const
+	{
+		return m_vec128;
+	}
+
+	B3_FORCE_INLINE	void	set128(__m256d v128)
+	{
+		m_vec128 = v128;
+	}
+
+	B3_FORCE_INLINE	operator       __m256d()
+	{
+		return m_vec128;
+	}
+	B3_FORCE_INLINE	operator const __m256d() const
+	{
+		return m_vec128;
+	}
+
+	B3_FORCE_INLINE	operator float() const
+	{
+		return m_floats[0];
+	}
+
+};
+
+///@brief Return the elementwise product of two b3SimdScalar
+B3_FORCE_INLINE b3SimdScalar
+operator*(const b3SimdScalar& v1, const b3SimdScalar& v2)
+{
+	return b3SimdScalar(_mm256_mul_pd(v1.get128(), v2.get128()));
+}
+
+///@brief Return the elementwise product of two b3SimdScalar
+B3_FORCE_INLINE b3SimdScalar
+operator+(const b3SimdScalar& v1, const b3SimdScalar& v2)
+{
+	return b3SimdScalar(_mm256_add_pd(v1.get128(), v2.get128()));
+}
 #else
 #define b3SimdScalar b3Scalar
 #endif

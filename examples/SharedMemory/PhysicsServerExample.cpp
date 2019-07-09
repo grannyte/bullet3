@@ -562,8 +562,9 @@ struct ColorWidth
 	}
 };
 
-ATTRIBUTE_ALIGNED16(class)
-MultithreadedDebugDrawer : public btIDebugDraw
+
+
+ATTRIBUTE_ALIGNED_DEFAULT( class )MultithreadedDebugDrawer : public btIDebugDraw
 {
 	struct GUIHelperInterface* m_guiHelper;
 	int m_debugMode;

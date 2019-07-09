@@ -62,8 +62,8 @@ enum btSliderFlags
 	BT_SLIDER_FLAGS_ERP_LIMANG = (1 << 11)
 };
 
-ATTRIBUTE_ALIGNED16(class)
-btSliderConstraint : public btTypedConstraint
+
+ATTRIBUTE_ALIGNED_DEFAULT(class) btSliderConstraint : public btTypedConstraint
 {
 protected:
 	///for backwards compatibility during the transition to 'getInfo/getInfo2'

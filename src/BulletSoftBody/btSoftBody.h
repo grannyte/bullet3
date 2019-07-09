@@ -266,7 +266,8 @@ public:
 		btVector3 m_uv1;
 		btVector3 m_normal;
 	};
-	struct Node : Feature
+	/* Link			*/ 
+	ATTRIBUTE_ALIGNED_DEFAULT(struct)	Link : Feature
 	{
 		btVector3 m_x;       // Position
 		btVector3 m_q;       // Previous step position/Test position

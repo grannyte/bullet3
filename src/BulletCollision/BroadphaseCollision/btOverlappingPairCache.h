@@ -84,8 +84,7 @@ public:
 
 /// Hash-space based Pair Cache, thanks to Erin Catto, Box2D, http://www.box2d.org, and Pierre Terdiman, Codercorner, http://codercorner.com
 
-ATTRIBUTE_ALIGNED16(class)
-btHashedOverlappingPairCache : public btOverlappingPairCache
+ATTRIBUTE_ALIGNED_DEFAULT(class) btHashedOverlappingPairCache : public btOverlappingPairCache
 {
 	btBroadphasePairArray m_overlappingPairArray;
 	btOverlapFilterCallback* m_overlapFilterCallback;

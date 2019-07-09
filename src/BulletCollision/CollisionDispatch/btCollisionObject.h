@@ -46,8 +46,7 @@ typedef btAlignedObjectArray<class btCollisionObject*> btCollisionObjectArray;
 /// btCollisionObject can be used to manage collision detection objects.
 /// btCollisionObject maintains all information that is needed for a collision detection: Shape, Transform and AABB proxy.
 /// They can be added to the btCollisionWorld.
-ATTRIBUTE_ALIGNED16(class)
-btCollisionObject
+ATTRIBUTE_ALIGNED_DEFAULT(class)	btCollisionObject
 {
 protected:
 	btTransform m_worldTransform;

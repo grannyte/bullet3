@@ -47,7 +47,7 @@ public:
 
 #else  //__CELLOS_LV2__ __SPU__
 
-#if defined(B3_USE_SSE) || defined(B3_USE_NEON)
+#if defined(B3_USE_SSE) || defined(B3_USE_AVX) || defined(B3_USE_NEON) 
 public:
 	union {
 		b3SimdFloat4 mVec128;
@@ -81,7 +81,7 @@ public:
 #endif  //__CELLOS_LV2__ __SPU__
 
 public:
-#if defined(B3_USE_SSE) || defined(B3_USE_NEON)
+#if defined(B3_USE_SSE) || defined(B3_USE_AVX) || defined(B3_USE_NEON)
 
 	// Set Vector
 	B3_FORCE_INLINE b3QuadWord(const b3SimdFloat4 vec)
@@ -131,12 +131,14 @@ public:
 	B3_FORCE_INLINE bool operator==(const b3QuadWord& other) const
 	{
 #ifdef B3_USE_SSE
-		return (0xf == _mm_movemask_ps((__m128)_mm_cmpeq_ps(mVec128, other.mVec128)));
-#else
-		return ((m_floats[3] == other.m_floats[3]) &&
-				(m_floats[2] == other.m_floats[2]) &&
-				(m_floats[1] == other.m_floats[1]) &&
-				(m_floats[0] == other.m_floats[0]));
+        return (0xf == _mm_movemask_ps((__m128)_mm_cmpeq_ps(mVec128, other.mVec128)));
+#elif defined(B3_USE_AVX)
+		return (0xf == _mm256_movemask_pd((__m256d)_mm256_cmp_pd(mVec128, other.mVec128, _CMP_EQ_OQ)));
+#else 
+		return ((m_floats[3]==other.m_floats[3]) && 
+                (m_floats[2]==other.m_floats[2]) && 
+                (m_floats[1]==other.m_floats[1]) && 
+                (m_floats[0]==other.m_floats[0]));
 #endif
 	}
 
@@ -208,35 +210,42 @@ public:
 	/**@brief Set each element to the max of the current values and the values of another b3QuadWord
    * @param other The other b3QuadWord to compare with 
    */
-	B3_FORCE_INLINE void setMax(const b3QuadWord& other)
-	{
-#ifdef B3_USE_SSE
-		mVec128 = _mm_max_ps(mVec128, other.mVec128);
-#elif defined(B3_USE_NEON)
-		mVec128 = vmaxq_f32(mVec128, other.mVec128);
-#else
-		b3SetMax(m_floats[0], other.m_floats[0]);
-		b3SetMax(m_floats[1], other.m_floats[1]);
-		b3SetMax(m_floats[2], other.m_floats[2]);
-		b3SetMax(m_floats[3], other.m_floats[3]);
-#endif
-	}
-	/**@brief Set each element to the min of the current values and the values of another b3QuadWord
+		B3_FORCE_INLINE void	setMax(const b3QuadWord& other)
+		{
+        #ifdef B3_USE_SSE
+            mVec128 = _mm_max_ps(mVec128, other.mVec128);
+        #elif defined(B3_USE_AVX)
+			mVec128 = _mm256_max_pd(mVec128, other.mVec128);
+        #elif defined(B3_USE_NEON)
+            mVec128 = vmaxq_f32(mVec128, other.mVec128);
+        #else
+        	b3SetMax(m_floats[0], other.m_floats[0]);
+			b3SetMax(m_floats[1], other.m_floats[1]);
+			b3SetMax(m_floats[2], other.m_floats[2]);
+			b3SetMax(m_floats[3], other.m_floats[3]);
+		#endif
+        }
+  /**@brief Set each element to the min of the current values and the values of another b3QuadWord
    * @param other The other b3QuadWord to compare with 
    */
-	B3_FORCE_INLINE void setMin(const b3QuadWord& other)
-	{
-#ifdef B3_USE_SSE
-		mVec128 = _mm_min_ps(mVec128, other.mVec128);
-#elif defined(B3_USE_NEON)
-		mVec128 = vminq_f32(mVec128, other.mVec128);
-#else
-		b3SetMin(m_floats[0], other.m_floats[0]);
-		b3SetMin(m_floats[1], other.m_floats[1]);
-		b3SetMin(m_floats[2], other.m_floats[2]);
-		b3SetMin(m_floats[3], other.m_floats[3]);
-#endif
-	}
+		B3_FORCE_INLINE void	setMin(const b3QuadWord& other)
+		{
+        #ifdef B3_USE_SSE
+            mVec128 = _mm_min_ps(mVec128, other.mVec128);
+        #elif defined(B3_USE_NEON)
+            mVec128 = _mm256_min_pd(mVec128, other.mVec128);
+        #elif defined(B3_USE_NEON)
+            mVec128 = vminq_f32(mVec128, other.mVec128);
+        #else
+        	b3SetMin(m_floats[0], other.m_floats[0]);
+			b3SetMin(m_floats[1], other.m_floats[1]);
+			b3SetMin(m_floats[2], other.m_floats[2]);
+			b3SetMin(m_floats[3], other.m_floats[3]);
+		#endif
+        }
+
+
+
 };
 
 #endif  //B3_SIMD_QUADWORD_H

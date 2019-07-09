@@ -316,8 +316,7 @@ void GL_ShapeDrawer::drawOpenGL(btScalar* m, const btCollisionShape* shape, cons
 		{
 			btTransform childTrans = compoundShape->getChildTransform(i);
 			const btCollisionShape* colShape = compoundShape->getChildShape(i);
-			ATTRIBUTE_ALIGNED16(btScalar)
-			childMat[16];
+			ATTRIBUTE_ALIGNED_DEFAULT(btScalar) childMat[16];
 			childTrans.getOpenGLMatrix(childMat);
 			drawOpenGL(childMat, colShape, color, debugMode, worldBoundsMin, worldBoundsMax);
 		}
@@ -673,8 +672,7 @@ void GL_ShapeDrawer::drawShadow(btScalar* m, const btVector3& extrusion, const b
 		{
 			btTransform childTrans = compoundShape->getChildTransform(i);
 			const btCollisionShape* colShape = compoundShape->getChildShape(i);
-			ATTRIBUTE_ALIGNED16(btScalar)
-			childMat[16];
+			ATTRIBUTE_ALIGNED_DEFAULT(btScalar) childMat[16];
 			childTrans.getOpenGLMatrix(childMat);
 			drawShadow(childMat, extrusion * childTrans.getBasis(), colShape, worldBoundsMin, worldBoundsMax);
 		}

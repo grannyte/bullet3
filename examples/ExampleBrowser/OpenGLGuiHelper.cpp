@@ -28,8 +28,7 @@ struct MyDebugVec3
 	float z;
 };
 
-ATTRIBUTE_ALIGNED16(class)
-MyDebugDrawer : public btIDebugDraw
+ATTRIBUTE_ALIGNED_DEFAULT( class )MyDebugDrawer : public btIDebugDraw
 {
 	CommonGraphicsApp* m_glApp;
 	int m_debugMode;

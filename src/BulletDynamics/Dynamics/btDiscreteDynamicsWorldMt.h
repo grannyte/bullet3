@@ -79,8 +79,7 @@ private:
 ///     - integrateTransforms
 ///     - createPredictiveContacts
 ///
-ATTRIBUTE_ALIGNED16(class)
-btDiscreteDynamicsWorldMt : public btDiscreteDynamicsWorld
+ATTRIBUTE_ALIGNED_DEFAULT(class) btDiscreteDynamicsWorldMt : public btDiscreteDynamicsWorld
 {
 protected:
 	btConstraintSolver* m_constraintSolverMt;

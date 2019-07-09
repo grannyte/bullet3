@@ -301,10 +301,11 @@ void btDbvtBroadphase::aabbTest(const btVector3& aabbMin, const btVector3& aabbM
 {
 	BroadphaseAabbTester callback(aabbCallback);
 
-	const ATTRIBUTE_ALIGNED16(btDbvtVolume) bounds = btDbvtVolume::FromMM(aabbMin, aabbMax);
-	//process all children, that overlap with  the given AABB bounds
-	m_sets[0].collideTV(m_sets[0].m_root, bounds, callback);
-	m_sets[1].collideTV(m_sets[1].m_root, bounds, callback);
+	const ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	bounds=btDbvtVolume::FromMM(aabbMin,aabbMax);
+		//process all children, that overlap with  the given AABB bounds
+	m_sets[0].collideTV(m_sets[0].m_root,bounds,callback);
+	m_sets[1].collideTV(m_sets[1].m_root,bounds,callback);
+
 }
 
 //
@@ -313,9 +314,8 @@ void btDbvtBroadphase::setAabb(btBroadphaseProxy* absproxy,
 							   const btVector3& aabbMax,
 							   btDispatcher* /*dispatcher*/)
 {
-	btDbvtProxy* proxy = (btDbvtProxy*)absproxy;
-	ATTRIBUTE_ALIGNED16(btDbvtVolume)
-	aabb = btDbvtVolume::FromMM(aabbMin, aabbMax);
+	btDbvtProxy*						proxy=(btDbvtProxy*)absproxy;
+	ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	aabb=btDbvtVolume::FromMM(aabbMin,aabbMax);
 #if DBVT_BP_PREVENTFALSEUPDATE
 	if (NotEqual(aabb, proxy->leaf->volume))
 #endif
@@ -378,12 +378,11 @@ void btDbvtBroadphase::setAabbForceUpdate(btBroadphaseProxy* absproxy,
 										  const btVector3& aabbMax,
 										  btDispatcher* /*dispatcher*/)
 {
-	btDbvtProxy* proxy = (btDbvtProxy*)absproxy;
-	ATTRIBUTE_ALIGNED16(btDbvtVolume)
-	aabb = btDbvtVolume::FromMM(aabbMin, aabbMax);
-	bool docollide = false;
-	if (proxy->stage == STAGECOUNT)
-	{ /* fixed -> dynamic set	*/
+	btDbvtProxy*						proxy=(btDbvtProxy*)absproxy;
+	ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	aabb=btDbvtVolume::FromMM(aabbMin,aabbMax);
+	bool	docollide=false;
+	if(proxy->stage==STAGECOUNT)
+	{/* fixed -> dynamic set	*/ 
 		m_sets[1].remove(proxy->leaf);
 		proxy->leaf = m_sets[0].insert(aabb, proxy);
 		docollide = true;
@@ -555,14 +554,13 @@ void btDbvtBroadphase::collide(btDispatcher* dispatcher)
 			btDbvt::collideTV(m_sets[1].m_root, current->aabb, collider);
 #endif
 			m_sets[0].remove(current->leaf);
-			ATTRIBUTE_ALIGNED16(btDbvtVolume)
-			curAabb = btDbvtVolume::FromMM(current->m_aabbMin, current->m_aabbMax);
-			current->leaf = m_sets[1].insert(curAabb, current);
-			current->stage = STAGECOUNT;
-			current = next;
-		} while (current);
-		m_fixedleft = m_sets[1].m_leaves;
-		m_needcleanup = true;
+			ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	curAabb=btDbvtVolume::FromMM(current->m_aabbMin,current->m_aabbMax);
+			current->leaf	=	m_sets[1].insert(curAabb,current);
+			current->stage	=	STAGECOUNT;	
+			current			=	next;
+		} while(current);
+		m_fixedleft=m_sets[1].m_leaves;
+		m_needcleanup=true;
 	}
 	/* collide dynamics		*/
 	{
@@ -648,10 +646,11 @@ void btDbvtBroadphase::getBroadphaseAabb(btVector3& aabbMin, btVector3& aabbMax)
 	ATTRIBUTE_ALIGNED16(btDbvtVolume)
 	bounds;
 
-	if (!m_sets[0].empty())
-		if (!m_sets[1].empty())
-			Merge(m_sets[0].m_root->volume,
-				  m_sets[1].m_root->volume, bounds);
+	ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	bounds;
+
+	if(!m_sets[0].empty())
+		if(!m_sets[1].empty())	Merge(	m_sets[0].m_root->volume,
+			m_sets[1].m_root->volume,bounds);
 		else
 			bounds = m_sets[0].m_root->volume;
 	else if (!m_sets[1].empty())

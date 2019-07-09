@@ -103,8 +103,9 @@ static btScalar gResolveSingleConstraintRowLowerLimit_scalar_reference(btSolverB
 #ifdef USE_SIMD
 #include <emmintrin.h>
 
-#define btVecSplat(x, e) _mm_shuffle_ps(x, x, _MM_SHUFFLE(e, e, e, e))
-static inline __m128 btSimdDot3(__m128 vec0, __m128 vec1)
+#ifdef BT_USE_SSE
+#define btVecSplat(x, e) _mm_shuffle_ps(x, x, _MM_SHUFFLE(e,e,e,e))
+static inline __m128 btSimdDot3( __m128 vec0, __m128 vec1 )
 {
 	__m128 result = _mm_mul_ps(vec0, vec1);
 	return _mm_add_ps(btVecSplat(result, 0), _mm_add_ps(btVecSplat(result, 1), btVecSplat(result, 2)));
@@ -117,8 +118,8 @@ static inline __m128 btSimdDot3(__m128 vec0, __m128 vec1)
 #define USE_FMA3_INSTEAD_FMA4 1
 #define USE_SSE4_DOT 1
 
-#define SSE4_DP(a, b) _mm_dp_ps(a, b, 0x7f)
-#define SSE4_DP_FP(a, b) _mm_cvtss_f32(_mm_dp_ps(a, b, 0x7f))
+#define SSE4_DP(a, b)			_mm_dp_ps(a, b, 0x7f)
+//#define SSE4_DP_FP(a, b)		_mm_cvtss_f32(_mm_dp_ps(a, b, 0x7f))
 
 #if USE_SSE4_DOT
 #define DOT_PRODUCT(a, b) SSE4_DP(a, b)
@@ -145,7 +146,58 @@ static inline __m128 btSimdDot3(__m128 vec0, __m128 vec1)
 #define FMNADD(a, b, c) _mm_sub_ps(c, _mm_mul_ps(a, b))
 #endif
 #endif
+#endif
 
+#if defined (BT_USE_AVX)
+#include <intrin.h>
+
+#define AVX_USE_FMA					1
+#define AVX_USE_FMA3_INSTEAD_FMA4	1
+#define AVX_USE_SSE4_DOT			1
+
+
+#define btVecSplat(x, e) _mm256_permute4x64_pd(x, _MM_SHUFFLE(e,e,e,e))
+static inline __m256d btSimdDot3AVX(__m256d vec0, __m256d vec1)
+{
+	__m256d result = _mm256_mul_pd(vec0, vec1);
+	return _mm256_add_pd(btVecSplat(result, 0), _mm256_add_pd(btVecSplat(result, 1), btVecSplat(result, 2)));
+}
+
+//#define AVX_DP(a, b)			_mm_dp_ps(a, b, 0x7f)
+//#define AVX_DP_FP(a, b)		_mm_cvtss_f32(_mm_dp_ps(a, b, 0x7f))
+
+#define AVX_DOT_PRODUCT btSimdDot3AVX
+//
+//btScalar AVX_DOT_PRODUCT(__m256d a, __m256d b)
+//{
+//	__m256d xy = _mm256_mul_pd(a, b);
+//	__m256d temp = _mm256_hadd_pd(xy, xy);
+//	__m128d hi128 = _mm256_extractf128_pd(temp, 1);
+//	__m128d dotproduct = _mm_add_pd(_mm256_castpd256_pd128(temp), hi128);
+//	return _mm_cvtsd_f64(dotproduct);
+//}
+
+#if USE_FMA
+#if USE_FMA3_INSTEAD_FMA4
+// a*b + c
+#define FMADD(a, b, c)		_mm256_fmadd_pd(a, b, c)
+// -(a*b) + c
+#define FMNADD(a, b, c)		_mm256_fnmadd_pd(a, b, c)
+#else // USE_FMA3
+// a*b + c
+#define FMADD(a, b, c)		_mm256_macc_pd(a, b, c)
+// -(a*b) + c
+#define FMNADD(a, b, c)		_mm256_nmacc_pd(a, b, c)
+#endif
+#else // USE_FMA
+// c + a*b
+#define FMADD(a, b, c)		_mm256_add_pd(c, _mm256_mul_pd(a, b))
+// c - a*b
+#define FMNADD(a, b, c)		_mm256_sub_pd(c, _mm256_mul_pd(a, b))
+#endif
+#endif
+
+#if defined (BT_USE_SSE)
 // Project Gauss Seidel or the equivalent Sequential Impulse
 static btScalar gResolveSingleConstraintRowGeneric_sse2(btSolverBody& bodyA, btSolverBody& bodyB, const btSolverConstraint& c)
 {
@@ -204,8 +256,35 @@ static btScalar gResolveSingleConstraintRowGeneric_sse4_1_fma3(btSolverBody& bod
 	return gResolveSingleConstraintRowGeneric_sse2(bodyA, bodyB, c);
 #endif
 }
+#endif // BT_USE_SSE
 
-static btScalar gResolveSingleConstraintRowLowerLimit_sse2(btSolverBody& bodyA, btSolverBody& bodyB, const btSolverConstraint& c)
+// Enhanced version of gResolveSingleConstraintRowGeneric_sse2 with AVX
+#if defined (BT_USE_AVX)
+static btSimdScalar gResolveSingleConstraintRowGeneric_avx(btSolverBody& body1, btSolverBody& body2, const btSolverConstraint& c)
+{
+	__m256d tmp = _mm256_set1_pd(c.m_jacDiagABInv);
+	__m256d deltaImpulse = _mm256_set1_pd(c.m_rhs - btScalar(c.m_appliedImpulse) * c.m_cfm);
+	const __m256d lowerLimit = _mm256_set1_pd(c.m_lowerLimit);
+	const __m256d upperLimit = _mm256_set1_pd(c.m_upperLimit);
+	const __m256d deltaVel1Dotn = _mm256_add_pd(AVX_DOT_PRODUCT(c.m_contactNormal1.mVec128, body1.internalGetDeltaLinearVelocity().mVec128), AVX_DOT_PRODUCT(c.m_relpos1CrossNormal.mVec128, body1.internalGetDeltaAngularVelocity().mVec128));
+	const __m256d deltaVel2Dotn = _mm256_add_pd(AVX_DOT_PRODUCT(c.m_contactNormal2.mVec128, body2.internalGetDeltaLinearVelocity().mVec128), AVX_DOT_PRODUCT(c.m_relpos2CrossNormal.mVec128, body2.internalGetDeltaAngularVelocity().mVec128));
+	deltaImpulse = FMNADD(deltaVel1Dotn, tmp, deltaImpulse);
+	deltaImpulse = FMNADD(deltaVel2Dotn, tmp, deltaImpulse);
+	tmp = _mm256_add_pd(c.m_appliedImpulse, deltaImpulse); // sum
+	const __m256d maskLower = _mm256_cmp_pd(tmp, lowerLimit, _CMP_GT_OS);
+	const __m256d maskUpper = _mm256_cmp_pd(upperLimit, tmp, _CMP_GT_OS);
+	deltaImpulse = _mm256_blendv_pd(_mm256_sub_pd(lowerLimit, c.m_appliedImpulse), _mm256_blendv_pd(_mm256_sub_pd(upperLimit, c.m_appliedImpulse), deltaImpulse, maskUpper), maskLower);
+	c.m_appliedImpulse = _mm256_blendv_pd(lowerLimit, _mm256_blendv_pd(upperLimit, tmp, maskUpper), maskLower);
+	body1.internalGetDeltaLinearVelocity().mVec128 = FMADD(_mm256_mul_pd(c.m_contactNormal1.mVec128, body1.internalGetInvMass().mVec128), deltaImpulse, body1.internalGetDeltaLinearVelocity().mVec128);
+	body1.internalGetDeltaAngularVelocity().mVec128 = FMADD(c.m_angularComponentA.mVec128, deltaImpulse, body1.internalGetDeltaAngularVelocity().mVec128);
+	body2.internalGetDeltaLinearVelocity().mVec128 = FMADD(_mm256_mul_pd(c.m_contactNormal2.mVec128, body2.internalGetInvMass().mVec128), deltaImpulse, body2.internalGetDeltaLinearVelocity().mVec128);
+	body2.internalGetDeltaAngularVelocity().mVec128 = FMADD(c.m_angularComponentB.mVec128, deltaImpulse, body2.internalGetDeltaAngularVelocity().mVec128);
+	return deltaImpulse;
+}
+#endif
+
+#if defined (BT_USE_SSE)
+static btSimdScalar gResolveSingleConstraintRowLowerLimit_sse2(btSolverBody& body1, btSolverBody& body2, const btSolverConstraint& c)
 {
 	__m128 cpAppliedImp = _mm_set1_ps(c.m_appliedImpulse);
 	__m128 lowerLimit1 = _mm_set1_ps(c.m_lowerLimit);
@@ -257,8 +336,29 @@ static btScalar gResolveSingleConstraintRowLowerLimit_sse4_1_fma3(btSolverBody& 
 	return gResolveSingleConstraintRowLowerLimit_sse2(bodyA, bodyB, c);
 #endif  //BT_ALLOW_SSE4
 }
+#endif //BT_USE_SSE
 
-#endif  //USE_SIMD
+#if defined (BT_USE_AVX)
+static btSimdScalar gResolveSingleConstraintRowLowerLimit_avx(btSolverBody& body1, btSolverBody& body2, const btSolverConstraint& c)
+{
+	__m256d tmp					= _mm256_set1_pd(c.m_jacDiagABInv);
+	__m256d deltaImpulse		= _mm256_set1_pd(c.m_rhs - btScalar(c.m_appliedImpulse)*c.m_cfm);
+	const __m256d lowerLimit	= _mm256_set1_pd(c.m_lowerLimit);
+	const __m256d deltaVel1Dotn	= _mm256_add_pd(AVX_DOT_PRODUCT(c.m_contactNormal1.mVec128, body1.internalGetDeltaLinearVelocity().mVec128), AVX_DOT_PRODUCT(c.m_relpos1CrossNormal.mVec128, body1.internalGetDeltaAngularVelocity().mVec128));
+	const __m256d deltaVel2Dotn	= _mm256_add_pd(AVX_DOT_PRODUCT(c.m_contactNormal2.mVec128, body2.internalGetDeltaLinearVelocity().mVec128), AVX_DOT_PRODUCT(c.m_relpos2CrossNormal.mVec128, body2.internalGetDeltaAngularVelocity().mVec128));
+	deltaImpulse				= FMNADD(deltaVel1Dotn, tmp, deltaImpulse);
+	deltaImpulse				= FMNADD(deltaVel2Dotn, tmp, deltaImpulse);
+	tmp							= _mm256_add_pd(c.m_appliedImpulse, deltaImpulse);
+	const __m256d mask			= _mm256_cmp_pd(tmp, lowerLimit, _CMP_GT_OS);
+	deltaImpulse				= _mm256_blendv_pd(_mm256_sub_pd(lowerLimit, c.m_appliedImpulse), deltaImpulse, mask);
+	c.m_appliedImpulse			= _mm256_blendv_pd(lowerLimit, tmp, mask);
+	body1.internalGetDeltaLinearVelocity().mVec128	= FMADD(_mm256_mul_pd(c.m_contactNormal1.mVec128, body1.internalGetInvMass().mVec128), deltaImpulse, body1.internalGetDeltaLinearVelocity().mVec128);
+	body1.internalGetDeltaAngularVelocity().mVec128 = FMADD(c.m_angularComponentA.mVec128, deltaImpulse, body1.internalGetDeltaAngularVelocity().mVec128);
+	body2.internalGetDeltaLinearVelocity().mVec128	= FMADD(_mm256_mul_pd(c.m_contactNormal2.mVec128, body2.internalGetInvMass().mVec128), deltaImpulse, body2.internalGetDeltaLinearVelocity().mVec128);
+	body2.internalGetDeltaAngularVelocity().mVec128 = FMADD(c.m_angularComponentB.mVec128, deltaImpulse, body2.internalGetDeltaAngularVelocity().mVec128);
+	return deltaImpulse;
+}
+#endif
 
 btScalar btSequentialImpulseConstraintSolver::resolveSingleConstraintRowGenericSIMD(btSolverBody& bodyA, btSolverBody& bodyB, const btSolverConstraint& c)
 {
@@ -313,7 +413,8 @@ static btScalar gResolveSplitPenetrationImpulse_scalar_reference(
 	return deltaImpulse * (1. / c.m_jacDiagABInv);
 }
 
-static btScalar gResolveSplitPenetrationImpulse_sse2(btSolverBody& bodyA, btSolverBody& bodyB, const btSolverConstraint& c)
+#ifdef BT_USE_SSE
+static btSimdScalar gResolveSplitPenetrationImpulse_sse2(btSolverBody& body1,btSolverBody& body2,const btSolverConstraint& c)
 {
 #ifdef USE_SIMD
 	if (!c.m_rhsPenetration)
@@ -349,6 +450,41 @@ static btScalar gResolveSplitPenetrationImpulse_sse2(btSolverBody& bodyA, btSolv
 	return gResolveSplitPenetrationImpulse_scalar_reference(bodyA, bodyB, c);
 #endif
 }
+#endif // BT_USE_SSE
+
+#if defined (BT_USE_AVX)
+static btSimdScalar gResolveSplitPenetrationImpulse_avx(btSolverBody& body1, btSolverBody& body2, const btSolverConstraint& c)
+{
+	if (!c.m_rhsPenetration)
+		return 0.f;
+
+	gNumSplitImpulseRecoveries++;
+
+	__m256d cpAppliedImp = _mm256_set1_pd(c.m_appliedPushImpulse);
+	__m256d	lowerLimit1 = _mm256_set1_pd(c.m_lowerLimit);
+	__m256d	upperLimit1 = _mm256_set1_pd(c.m_upperLimit);
+	__m256d deltaImpulse = _mm256_sub_pd(_mm256_set1_pd(c.m_rhsPenetration), _mm256_mul_pd(_mm256_set1_pd(c.m_appliedPushImpulse), _mm256_set1_pd(c.m_cfm)));
+	__m256d deltaVel1Dotn = _mm256_add_pd(btSimdDot3AVX(c.m_contactNormal1.mVec128, body1.internalGetPushVelocity().mVec128), btSimdDot3AVX(c.m_relpos1CrossNormal.mVec128, body1.internalGetTurnVelocity().mVec128));
+	__m256d deltaVel2Dotn = _mm256_add_pd(btSimdDot3AVX(c.m_contactNormal2.mVec128, body2.internalGetPushVelocity().mVec128), btSimdDot3AVX(c.m_relpos2CrossNormal.mVec128, body2.internalGetTurnVelocity().mVec128));
+	deltaImpulse = _mm256_sub_pd(deltaImpulse, _mm256_mul_pd(deltaVel1Dotn, _mm256_set1_pd(c.m_jacDiagABInv)));
+	deltaImpulse = _mm256_sub_pd(deltaImpulse, _mm256_mul_pd(deltaVel2Dotn, _mm256_set1_pd(c.m_jacDiagABInv)));
+	btSimdScalar sum = _mm256_add_pd(cpAppliedImp, deltaImpulse);
+	btSimdScalar resultLowerLess, resultUpperLess;
+	resultLowerLess = _mm256_cmp_pd(sum, lowerLimit1, _CMP_LT_OS);
+	resultUpperLess = _mm256_cmp_pd(sum, upperLimit1, _CMP_LT_OS);
+	__m256d lowMinApplied = _mm256_sub_pd(lowerLimit1, cpAppliedImp);
+	deltaImpulse = _mm256_or_pd(_mm256_and_pd(resultLowerLess, lowMinApplied), _mm256_andnot_pd(resultLowerLess, deltaImpulse));
+	c.m_appliedPushImpulse = _mm256_or_pd(_mm256_and_pd(resultLowerLess, lowerLimit1), _mm256_andnot_pd(resultLowerLess, sum));
+	__m256d	linearComponentA = _mm256_mul_pd(c.m_contactNormal1.mVec128, body1.internalGetInvMass().mVec128);
+	__m256d	linearComponentB = _mm256_mul_pd(c.m_contactNormal2.mVec128, body2.internalGetInvMass().mVec128);
+	__m256d impulseMagnitude = deltaImpulse;
+	body1.internalGetPushVelocity().mVec128 = _mm256_add_pd(body1.internalGetPushVelocity().mVec128, _mm256_mul_pd(linearComponentA, impulseMagnitude));
+	body1.internalGetTurnVelocity().mVec128 = _mm256_add_pd(body1.internalGetTurnVelocity().mVec128, _mm256_mul_pd(c.m_angularComponentA.mVec128, impulseMagnitude));
+	body2.internalGetPushVelocity().mVec128 = _mm256_add_pd(body2.internalGetPushVelocity().mVec128, _mm256_mul_pd(linearComponentB, impulseMagnitude));
+	body2.internalGetTurnVelocity().mVec128 = _mm256_add_pd(body2.internalGetTurnVelocity().mVec128, _mm256_mul_pd(c.m_angularComponentB.mVec128, impulseMagnitude));
+	return deltaImpulse;
+}
+#endif
 
 btSequentialImpulseConstraintSolver::btSequentialImpulseConstraintSolver()
 {
@@ -365,21 +501,27 @@ void btSequentialImpulseConstraintSolver::setupSolverFunctions(bool useSimd)
 
 	if (useSimd)
 	{
-#ifdef USE_SIMD
+#ifdef BT_USE_SSE
 		m_resolveSingleConstraintRowGeneric = gResolveSingleConstraintRowGeneric_sse2;
 		m_resolveSingleConstraintRowLowerLimit = gResolveSingleConstraintRowLowerLimit_sse2;
 		m_resolveSplitPenetrationImpulse = gResolveSplitPenetrationImpulse_sse2;
 
 #ifdef BT_ALLOW_SSE4
-		int cpuFeatures = btCpuFeatureUtility::getCpuFeatures();
-		if ((cpuFeatures & btCpuFeatureUtility::CPU_FEATURE_FMA3) && (cpuFeatures & btCpuFeatureUtility::CPU_FEATURE_SSE4_1))
-		{
-			m_resolveSingleConstraintRowGeneric = gResolveSingleConstraintRowGeneric_sse4_1_fma3;
-			m_resolveSingleConstraintRowLowerLimit = gResolveSingleConstraintRowLowerLimit_sse4_1_fma3;
-		}
-#endif  //BT_ALLOW_SSE4
-#endif  //USE_SIMD
-	}
+        int cpuFeatures = btCpuFeatureUtility::getCpuFeatures();
+        if ((cpuFeatures & btCpuFeatureUtility::CPU_FEATURE_FMA3) && (cpuFeatures & btCpuFeatureUtility::CPU_FEATURE_SSE4_1))
+        {
+            m_resolveSingleConstraintRowGeneric = gResolveSingleConstraintRowGeneric_sse4_1_fma3;
+            m_resolveSingleConstraintRowLowerLimit = gResolveSingleConstraintRowLowerLimit_sse4_1_fma3;
+        }
+#endif//BT_ALLOW_SSE4
+#endif //USE_SIMD
+
+#if defined (BT_USE_AVX)
+		m_resolveSingleConstraintRowGeneric = gResolveSingleConstraintRowGeneric_avx;
+		m_resolveSingleConstraintRowLowerLimit = gResolveSingleConstraintRowLowerLimit_avx;
+		m_resolveSplitPenetrationImpulse = gResolveSplitPenetrationImpulse_avx;
+#endif
+    }
 }
 
 btSequentialImpulseConstraintSolver::~btSequentialImpulseConstraintSolver()
@@ -397,25 +539,37 @@ btSingleConstraintRowSolver btSequentialImpulseConstraintSolver::getScalarConstr
 }
 
 #ifdef USE_SIMD
-btSingleConstraintRowSolver btSequentialImpulseConstraintSolver::getSSE2ConstraintRowSolverGeneric()
-{
-	return gResolveSingleConstraintRowGeneric_sse2;
-}
-btSingleConstraintRowSolver btSequentialImpulseConstraintSolver::getSSE2ConstraintRowSolverLowerLimit()
-{
-	return gResolveSingleConstraintRowLowerLimit_sse2;
-}
+#ifdef BT_USE_SSE
+ btSingleConstraintRowSolver	btSequentialImpulseConstraintSolver::getSSE2ConstraintRowSolverGeneric()
+ {
+	 return gResolveSingleConstraintRowGeneric_sse2;
+ }
+ btSingleConstraintRowSolver	btSequentialImpulseConstraintSolver::getSSE2ConstraintRowSolverLowerLimit()
+ {
+	 return gResolveSingleConstraintRowLowerLimit_sse2;
+ }
 #ifdef BT_ALLOW_SSE4
-btSingleConstraintRowSolver btSequentialImpulseConstraintSolver::getSSE4_1ConstraintRowSolverGeneric()
-{
-	return gResolveSingleConstraintRowGeneric_sse4_1_fma3;
-}
-btSingleConstraintRowSolver btSequentialImpulseConstraintSolver::getSSE4_1ConstraintRowSolverLowerLimit()
-{
-	return gResolveSingleConstraintRowLowerLimit_sse4_1_fma3;
-}
-#endif  //BT_ALLOW_SSE4
-#endif  //USE_SIMD
+ btSingleConstraintRowSolver	btSequentialImpulseConstraintSolver::getSSE4_1ConstraintRowSolverGeneric()
+ {
+	 return gResolveSingleConstraintRowGeneric_sse4_1_fma3;
+ }
+ btSingleConstraintRowSolver	btSequentialImpulseConstraintSolver::getSSE4_1ConstraintRowSolverLowerLimit()
+ {
+	 return gResolveSingleConstraintRowLowerLimit_sse4_1_fma3;
+ }
+#endif //BT_ALLOW_SSE4
+
+#elif defined (BT_USE_AVX)
+ btSingleConstraintRowSolver	btSequentialImpulseConstraintSolver::getAVXConstraintRowSolverGeneric()
+ {
+	 return gResolveSingleConstraintRowGeneric_avx;
+ }
+ btSingleConstraintRowSolver	btSequentialImpulseConstraintSolver::getAVXConstraintRowSolverLowerLimit()
+ {
+	 return gResolveSingleConstraintRowLowerLimit_avx;
+ }
+#endif //BT_USE_SSE
+#endif //USE_SIMD
 
 unsigned long btSequentialImpulseConstraintSolver::btRand2()
 {

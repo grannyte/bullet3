@@ -81,13 +81,17 @@ inline int btIsDoublePrecision()
     	#elif ( defined(_MSC_VER) && _MSC_VER < 1300 )
 		#define SIMD_FORCE_INLINE inline
 		#define ATTRIBUTE_ALIGNED16(a) a
+		#define ATTRIBUTE_ALIGNED32(a) a
 		#define ATTRIBUTE_ALIGNED64(a) a
 		#define ATTRIBUTE_ALIGNED128(a) a
+		#define ATTRIBUTE_ALIGNED_DEFAULT(a) a
 	#elif defined(_M_ARM)
 		#define SIMD_FORCE_INLINE __forceinline
 		#define ATTRIBUTE_ALIGNED16(a) __declspec() a
+		#define ATTRIBUTE_ALIGNED32(a) __declspec() a
 		#define ATTRIBUTE_ALIGNED64(a) __declspec() a
 		#define ATTRIBUTE_ALIGNED128(a) __declspec () a
+		#define ATTRIBUTE_ALIGNED_DEFAULT(a) __declspec() a
 	#else//__MINGW32__
 		//#define BT_HAS_ALIGNED_ALLOCATOR
 		#pragma warning(disable : 4324) // disable padding warning
@@ -95,10 +99,6 @@ inline int btIsDoublePrecision()
 		#pragma warning(disable:4996) //Turn off warnings about deprecated C routines
 //			#pragma warning(disable:4786) // Disable the "debug name too long" warning
 
-		#define SIMD_FORCE_INLINE __forceinline
-		#define ATTRIBUTE_ALIGNED16(a) __declspec(align(16)) a
-		#define ATTRIBUTE_ALIGNED64(a) __declspec(align(64)) a
-		#define ATTRIBUTE_ALIGNED128(a) __declspec (align(128)) a
 		#ifdef _XBOX
 			#define BT_USE_VMX128
 
@@ -135,9 +135,42 @@ inline int btIsDoublePrecision()
 			//#define BT_USE_SSE_IN_API
 			#endif //BT_USE_SSE
 			#include <emmintrin.h>
+
+#elif (defined (_WIN32) && (_MSC_VER) && _MSC_VER >= 1400) && (defined (BT_USE_DOUBLE_PRECISION))
+			#if _MSC_VER>1400
+				#define BT_USE_SIMD_VECTOR3
+			#endif
+
+			#define BT_USE_AVX
+			#ifdef BT_USE_AVX
+
+#if (_MSC_FULL_VER >= 170050727)//Visual Studio 2012 can compile SSE4/FMA3 (but SSE4/FMA3 is not enabled by default)
+			//#define BT_ALLOW_SSE4
+#endif //(_MSC_FULL_VER >= 160040219)
+
+			//BT_USE_SSE_IN_API is disabled under Windows by default, because 
+			//it makes it harder to integrate Bullet into your application under Windows 
+			//(structured embedding Bullet structs/classes need to be 16-byte aligned)
+			//with relatively little performance gain
+			//If you are not embedded Bullet data in your classes, or make sure that you align those classes on 16-byte boundaries
+			//you can manually enable this line or set it in the build system for a bit of performance gain (a few percent, dependent on usage)
+			//#define BT_USE_SSE_IN_API
+			#endif //BT_USE_AVX
+			#include <immintrin.h>
 #endif
 
 		#endif//_XBOX
+
+		#define SIMD_FORCE_INLINE __forceinline
+		#define ATTRIBUTE_ALIGNED16(a) __declspec(align(16)) a
+		#define ATTRIBUTE_ALIGNED32(a) __declspec(align(32)) a
+		#define ATTRIBUTE_ALIGNED64(a) __declspec(align(64)) a
+		#define ATTRIBUTE_ALIGNED128(a) __declspec (align(128)) a
+		#ifdef BT_USE_AVX
+			#define ATTRIBUTE_ALIGNED_DEFAULT(a) __declspec(align(32)) a
+		#else
+			#define ATTRIBUTE_ALIGNED_DEFAULT(a) __declspec(align(16)) a
+		#endif
 
 	#endif //__MINGW32__
 
@@ -163,8 +196,10 @@ inline int btIsDoublePrecision()
 	#if defined	(__CELLOS_LV2__)
 		#define SIMD_FORCE_INLINE inline __attribute__((always_inline))
 		#define ATTRIBUTE_ALIGNED16(a) a __attribute__ ((aligned (16)))
+		#define ATTRIBUTE_ALIGNED32(a) a __attribute__ ((aligned (32)))
 		#define ATTRIBUTE_ALIGNED64(a) a __attribute__ ((aligned (64)))
 		#define ATTRIBUTE_ALIGNED128(a) a __attribute__ ((aligned (128)))
+		#define ATTRIBUTE_ALIGNED_DEFAULT(a) a __attribute__ ((aligned (16)))
 		#ifndef assert
 		#include <assert.h>
 		#endif
@@ -192,8 +227,10 @@ inline int btIsDoublePrecision()
 
 			#define SIMD_FORCE_INLINE __inline
 			#define ATTRIBUTE_ALIGNED16(a) a __attribute__ ((aligned (16)))
+			#define ATTRIBUTE_ALIGNED32(a) a __attribute__ ((aligned (32)))
 			#define ATTRIBUTE_ALIGNED64(a) a __attribute__ ((aligned (64)))
 			#define ATTRIBUTE_ALIGNED128(a) a __attribute__ ((aligned (128)))
+			#define ATTRIBUTE_ALIGNED_DEFAULT(a) a __attribute__ ((aligned (16)))
 			#ifndef assert
 			#include <assert.h>
 			#endif
@@ -246,8 +283,10 @@ inline int btIsDoublePrecision()
 				#define SIMD_FORCE_INLINE inline __attribute__ ((always_inline))
 			///@todo: check out alignment methods for other platforms/compilers
 				#define ATTRIBUTE_ALIGNED16(a) a __attribute__ ((aligned (16)))
+				#define ATTRIBUTE_ALIGNED32(a) a __attribute__ ((aligned (32)))
 				#define ATTRIBUTE_ALIGNED64(a) a __attribute__ ((aligned (64)))
 				#define ATTRIBUTE_ALIGNED128(a) a __attribute__ ((aligned (128)))
+				#define ATTRIBUTE_ALIGNED_DEFAULT(a) a __attribute__ ((aligned (16)))
 				#ifndef assert
 				#include <assert.h>
 				#endif
@@ -283,8 +322,10 @@ inline int btIsDoublePrecision()
 				///#define ATTRIBUTE_ALIGNED64(a) a __attribute__ ((aligned (64)))
 				///#define ATTRIBUTE_ALIGNED128(a) a __attribute__ ((aligned (128)))
 				#define ATTRIBUTE_ALIGNED16(a) a
+				#define ATTRIBUTE_ALIGNED32(a) a
 				#define ATTRIBUTE_ALIGNED64(a) a
 				#define ATTRIBUTE_ALIGNED128(a) a
+				#define ATTRIBUTE_ALIGNED_DEFAULT(a) a
 				#ifndef assert
 				#include <assert.h>
 				#endif
@@ -318,6 +359,8 @@ inline int btIsDoublePrecision()
 
 #ifdef BT_USE_SSE
 	typedef __m128 btSimdFloat4;
+#elif defined (BT_USE_AVX)
+	typedef __m256d btSimdFloat4;
 #endif  //BT_USE_SSE
 
 #if defined(BT_USE_SSE)
@@ -377,7 +420,66 @@ inline int btIsDoublePrecision()
 		#define BT_INFINITY INFINITY
 		#define BT_NAN NAN
 	#endif  //_WIN32
-#else//BT_USE_SSE
+
+#elif defined(BT_USE_AVX)
+	//#if defined BT_USE_SSE_IN_API && defined (BT_USE_SSE)
+	#ifdef _WIN32
+
+		#ifndef BT_NAN
+			static long long int btNanMask = 0x7FF0000000000001;
+			#define BT_NAN (*(double *)&btNanMask)
+		#endif
+
+		#ifndef BT_INFINITY
+			static long long int btInfinityMask = 0x7FF0000000000000;
+			#define BT_INFINITY (*(double *)&btInfinityMask)
+			inline long long int btGetInfinityMask()  //suppress stupid compiler warning
+			{
+				return btInfinityMask;
+			}
+		#endif
+
+
+
+	//use this, in case there are clashes (such as xnamath.h)
+	#ifndef BT_NO_SIMD_OPERATOR_OVERLOADS
+	inline __m256d operator+(const __m256d A, const __m256d B)
+	{
+		return _mm256_add_pd(A, B);
+	}
+
+	inline __m256d operator-(const __m256d A, const __m256d B)
+	{
+		return _mm256_sub_pd(A, B);
+	}
+
+	inline __m256d operator*(const __m256d A, const __m256d B)
+	{
+		return _mm256_mul_pd(A, B);
+	}
+	#endif  //BT_NO_SIMD_OPERATOR_OVERLOADS
+
+	#define btCastdTo256i(a) (_mm256_castpd_si256(a))
+	//#define btCastfTo128d(a) (_mm_castps_pd(a))
+	#define btCastiTo256d(a) (_mm256_castsi256_pd(a))
+	//#define btCastdTo128f(a) (_mm_castpd_ps(a))
+	//#define btCastdTo128i(a) (_mm_castpd_si128(a))
+	//#define btAssign128(r0, r1, r2, r3) _mm256_setr_ps(r0, r1, r2, r3)
+
+	#else  //_WIN32
+
+		#define btCastdTo256i(a) (_mm256_castpd_si256(a))
+		//#define btCastdTo256d(a) ((__m256d)(a))
+		#define btCastiTo256d(a) (_mm256_castsi256_pd(a))
+		//#define btCastdTo256f(a) ((__m256d)(a))
+		//#define btCastdTo256i(a) ((__m256i)(a))
+		//#define btAssign128(r0, r1, r2, r3) \
+		//	(__m128) { r0, r1, r2, r3 }
+		#define BT_INFINITY INFINITY
+		#define BT_NAN NAN
+	#endif  //_WIN32
+
+#else//BT_USE_AVX
 
 	#ifdef BT_USE_NEON
 	#include <arm_neon.h>

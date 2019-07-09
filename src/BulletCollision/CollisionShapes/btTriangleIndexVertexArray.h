@@ -22,8 +22,7 @@ subject to the following restrictions:
 
 ///The btIndexedMesh indexes a single vertex and index array. Multiple btIndexedMesh objects can be passed into a btTriangleIndexVertexArray using addIndexedMesh.
 ///Instead of the number of indices, we pass the number of triangles.
-ATTRIBUTE_ALIGNED16(struct)
-btIndexedMesh
+ATTRIBUTE_ALIGNED_DEFAULT( struct)	btIndexedMesh
 {
 	BT_DECLARE_ALIGNED_ALLOCATOR();
 
@@ -62,8 +61,7 @@ typedef btAlignedObjectArray<btIndexedMesh> IndexedMeshArray;
 ///Additional meshes can be added using addIndexedMesh
 ///No duplicate is made of the vertex/index data, it only indexes into external vertex/index arrays.
 ///So keep those arrays around during the lifetime of this btTriangleIndexVertexArray.
-ATTRIBUTE_ALIGNED16(class)
-btTriangleIndexVertexArray : public btStridingMeshInterface
+ATTRIBUTE_ALIGNED_DEFAULT( class) btTriangleIndexVertexArray : public btStridingMeshInterface
 {
 protected:
 	IndexedMeshArray m_indexedMeshes;

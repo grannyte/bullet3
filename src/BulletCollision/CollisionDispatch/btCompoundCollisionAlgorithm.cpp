@@ -288,7 +288,7 @@ void btCompoundCollisionAlgorithm::processCollision(const btCollisionObjectWrapp
 		localAabbMin -= extraExtends;
 		localAabbMax += extraExtends;
 
-		const ATTRIBUTE_ALIGNED16(btDbvtVolume) bounds = btDbvtVolume::FromMM(localAabbMin, localAabbMax);
+		const ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	bounds=btDbvtVolume::FromMM(localAabbMin,localAabbMax);
 		//process all children, that overlap with  the given AABB bounds
 		tree->collideTVNoStackAlloc(tree->m_root, bounds, stack2, callback);
 	}

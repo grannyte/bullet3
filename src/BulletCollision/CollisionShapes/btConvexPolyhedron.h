@@ -30,8 +30,8 @@ struct btFace
 	btScalar m_plane[4];
 };
 
-ATTRIBUTE_ALIGNED16(class)
-btConvexPolyhedron
+
+ATTRIBUTE_ALIGNED_DEFAULT(class) btConvexPolyhedron
 {
 public:
 	BT_DECLARE_ALIGNED_ALLOCATOR();

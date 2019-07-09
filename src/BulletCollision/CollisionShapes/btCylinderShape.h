@@ -21,8 +21,7 @@ subject to the following restrictions:
 #include "LinearMath/btVector3.h"
 
 /// The btCylinderShape class implements a cylinder shape primitive, centered around the origin. Its central axis aligned with the Y axis. btCylinderShapeX is aligned with the X axis and btCylinderShapeZ around the Z axis.
-ATTRIBUTE_ALIGNED16(class)
-btCylinderShape : public btConvexInternalShape
+ATTRIBUTE_ALIGNED_DEFAULT(class) btCylinderShape : public btConvexInternalShape
 
 {
 protected:

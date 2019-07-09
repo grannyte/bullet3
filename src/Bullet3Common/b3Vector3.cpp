@@ -20,11 +20,13 @@
 
 #include "b3Vector3.h"
 
-#if defined(B3_USE_SSE) || defined(B3_USE_NEON)
+#if defined (B3_USE_SSE) || defined (B3_USE_AVX) || defined (B3_USE_NEON)
 
 #ifdef __APPLE__
 #include <stdint.h>
 typedef float float4 __attribute__((vector_size(16)));
+#elif defined(B3_USE_AVX)
+#define float4 __m256d
 #else
 #define float4 __m128
 #endif
@@ -823,6 +825,10 @@ long b3_mindot_large(const float *vv, const float *vec, unsigned long count, flo
 	_mm_store_ss(dotResult, dotmin);
 	return minIndex;
 }
+
+/* TODO_AVX
+#elif defined (B3_USE_AVX)
+*/
 
 #elif defined B3_USE_NEON
 #define ARM_NEON_GCC_COMPATIBILITY 1

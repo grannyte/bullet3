@@ -23,11 +23,19 @@ subject to the following restrictions:
 //const __m128 B3_ATTRIBUTE_ALIGNED16(b3v2220) = {2.0f, 2.0f, 2.0f, 0.0f};
 const __m128 B3_ATTRIBUTE_ALIGNED16(b3vMPPP) = {-0.0f, +0.0f, +0.0f, +0.0f};
 #endif
+#ifdef B3_USE_AVX
+const __m256d B3_ATTRIBUTE_ALIGNED32(b3vMPPP) = { -0.0, +0.0, +0.0, +0.0 };
+#endif
 
 #if defined(B3_USE_SSE) || defined(B3_USE_NEON)
-const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED16(b3v1000) = {1.0f, 0.0f, 0.0f, 0.0f};
-const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED16(b3v0100) = {0.0f, 1.0f, 0.0f, 0.0f};
-const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED16(b3v0010) = {0.0f, 0.0f, 1.0f, 0.0f};
+const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED16(b3v1000) = { 1.0f, 0.0f, 0.0f, 0.0f };
+const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED16(b3v0100) = { 0.0f, 1.0f, 0.0f, 0.0f };
+const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED16(b3v0010) = { 0.0f, 0.0f, 1.0f, 0.0f };
+#endif
+#if defined(B3_USE_AVX)
+const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED32(b3v1000) = { 1.0, 0.0, 0.0, 0.0 };
+const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED32(b3v0100) = { 0.0, 1.0, 0.0, 0.0 };
+const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED32(b3v0010) = { 0.0, 0.0, 1.0, 0.0 };
 #endif
 
 #ifdef B3_USE_DOUBLE_PRECISION
@@ -69,8 +77,8 @@ public:
 				 zx, zy, zz);
 	}
 
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
-	B3_FORCE_INLINE b3Matrix3x3(const b3SimdFloat4 v0, const b3SimdFloat4 v1, const b3SimdFloat4 v2)
+#if (defined (B3_USE_SSE_IN_API) && (defined (B3_USE_SSE) || defined (B3_USE_AVX))) || defined (B3_USE_NEON)
+	B3_FORCE_INLINE b3Matrix3x3 (const b3SimdFloat4 v0, const b3SimdFloat4 v1, const b3SimdFloat4 v2 ) 
 	{
 		m_el[0].mVec128 = v0;
 		m_el[1].mVec128 = v1;
@@ -242,7 +250,59 @@ public:
 		V2 = V2 + V21;
 		V3 = V3 + V31;
 
-		vs = b3_splat3_ps(vs, 0);
+        vs = b3_splat3_ps(vs, 0);
+            //	s ready
+        V1 = V1 * vs;
+        V2 = V2 * vs;
+        V3 = V3 * vs;
+        
+        V1 = V1 + b3v1000;
+        V2 = V2 + b3v0100;
+        V3 = V3 + b3v0010;
+        
+        m_el[0] = b3MakeVector3(V1); 
+        m_el[1] = b3MakeVector3(V2);
+        m_el[2] = b3MakeVector3(V3);
+    #elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		__m256d	vs, Q = q.get128();
+		__m256i Qi = b3CastdTo256i(Q);
+		__m256d	Y, Z;
+		__m256d	V1, V2, V3;
+		__m256d	V11, V21, V31;
+		__m256d	NQ = _mm256_xor_pd(Q, b3vMzeroMask);
+		__m256i NQi = b3CastdTo256i(NQ);
+
+		V1 = b3CastiTo256d(_mm256_shuffle_epi32(Qi, B3_SHUFFLE(1, 0, 2, 3)));	// Y X Z W
+		V2 = __mm256_shuffle_pd(NQ, Q, B3_SHUFFLE(0, 0, 1, 3));     // -X -X  Y  W
+		V3 = b3CastiTo256d(_mm256_shuffle_epi32(Qi, B3_SHUFFLE(2, 1, 0, 3)));	// Z Y X W
+		V1 = _mm256_xor_pd(V1, b3vMPPP);	//	change the sign of the first element
+
+		V11 = b3CastiTo256d(_mm256_shuffle_epi32(Qi, B3_SHUFFLE(1, 1, 0, 3)));	// Y Y X W
+		V21 = _mm256_unpackhi_pd(Q, Q);                    //  Z  Z  W  W
+		V31 = __mm256_shuffle_pd(Q, NQ, B3_SHUFFLE(0, 2, 0, 3));	//  X  Z -X -W
+
+		V2 = V2 * V1;	//
+		V1 = V1 * V11;	//
+		V3 = V3 * V31;	//
+
+		V11 = __mm256_shuffle_pd(NQ, Q, B3_SHUFFLE(2, 3, 1, 3));	//	-Z -W  Y  W
+		V11 = V11 * V21;	//
+		V21 = _mm256_xor_pd(V21, b3vMPPP);	//	change the sign of the first element
+		V31 = __mm256_shuffle_pd(Q, NQ, B3_SHUFFLE(3, 3, 1, 3));	//	 W  W -Y -W
+		V31 = _mm256_xor_pd(V31, b3vMPPP);	//	change the sign of the first element
+		Y = b3CastiTo256d(_mm256_shuffle_epi32(NQi, B3_SHUFFLE(3, 2, 0, 3)));	// -W -Z -X -W
+		Z = b3CastiTo256d(_mm256_shuffle_epi32(Qi, B3_SHUFFLE(1, 0, 1, 3)));	//  Y  X  Y  W
+
+		//vs = _mm_load_ss(&s);
+		vs = _mm256_set1_pd(s);
+		V21 = V21 * Y;
+		V31 = V31 * Z;
+
+		V1 = V1 + V11;
+		V2 = V2 + V21;
+		V3 = V3 + V31;
+
+		//vs = b3_splat3_ps(vs, 0);
 		//	s ready
 		V1 = V1 * vs;
 		V2 = V2 * vs;
@@ -255,11 +315,11 @@ public:
 		m_el[0] = b3MakeVector3(V1);
 		m_el[1] = b3MakeVector3(V2);
 		m_el[2] = b3MakeVector3(V3);
-#else
-		b3Scalar xs = q.getX() * s, ys = q.getY() * s, zs = q.getZ() * s;
-		b3Scalar wx = q.getW() * xs, wy = q.getW() * ys, wz = q.getW() * zs;
-		b3Scalar xx = q.getX() * xs, xy = q.getX() * ys, xz = q.getX() * zs;
-		b3Scalar yy = q.getY() * ys, yz = q.getY() * zs, zz = q.getZ() * zs;
+	#else
+		b3Scalar xs = q.getX() * s,   ys = q.getY() * s,   zs = q.getZ() * s;
+		b3Scalar wx = q.getW() * xs,  wy = q.getW() * ys,  wz = q.getW() * zs;
+		b3Scalar xx = q.getX() * xs,  xy = q.getX() * ys,  xz = q.getX() * zs;
+		b3Scalar yy = q.getY() * ys,  yz = q.getY() * zs,  zz = q.getZ() * zs;
 		setValue(
 			b3Scalar(1.0) - (yy + zz), xy - wz, xz + wy,
 			xy + wz, b3Scalar(1.0) - (xx + zz), yz - wx,
@@ -307,11 +367,11 @@ public:
 
 	/**@brief Set the matrix to the identity */
 	void setIdentity()
-	{
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
-		m_el[0] = b3MakeVector3(b3v1000);
-		m_el[1] = b3MakeVector3(b3v0100);
-		m_el[2] = b3MakeVector3(b3v0010);
+	{ 
+#if (defined(B3_USE_SSE_IN_API)&& (defined (B3_USE_SSE) || defined (B3_USE_AVX))) || defined(B3_USE_NEON)
+			m_el[0] = b3MakeVector3(b3v1000); 
+			m_el[1] = b3MakeVector3(b3v0100);
+			m_el[2] = b3MakeVector3(b3v0010);
 #else
 		setValue(b3Scalar(1.0), b3Scalar(0.0), b3Scalar(0.0),
 				 b3Scalar(0.0), b3Scalar(1.0), b3Scalar(0.0),
@@ -321,9 +381,9 @@ public:
 
 	static const b3Matrix3x3& getIdentity()
 	{
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
-		static const b3Matrix3x3
-			identityMatrix(b3v1000, b3v0100, b3v0010);
+#if (defined(B3_USE_SSE_IN_API)&& (defined (B3_USE_SSE) || defined (B3_USE_AVX))) || defined(B3_USE_NEON)
+        static const b3Matrix3x3 
+        identityMatrix(b3v1000, b3v0100, b3v0010);
 #else
 		static const b3Matrix3x3
 			identityMatrix(
@@ -357,6 +417,10 @@ public:
 		vm[0] = v0;
 		vm[1] = v1;
 		vm[2] = v2;
+/* 
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+TODO_AVX
+*/
 #elif defined(B3_USE_NEON)
 		// note: zeros the w channel. We can preserve it at the cost of two more vtrn instructions.
 		static const uint32x2_t zMask = (const uint32x2_t){-1, 0};
@@ -391,9 +455,18 @@ public:
 	* @param q The quaternion which will be set */
 	void getRotation(b3Quaternion & q) const
 	{
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
-		b3Scalar trace = m_el[0].getX() + m_el[1].getY() + m_el[2].getZ();
-		b3Scalar s, x;
+#if (defined (B3_USE_SSE_IN_API) && (defined (B3_USE_SSE) || defined (B3_USE_AVX)))|| defined (B3_USE_NEON)
+        b3Scalar trace = m_el[0].getX() + m_el[1].getY() + m_el[2].getZ();
+        b3Scalar s, x;
+        
+        union {
+            b3SimdFloat4 vec;
+            b3Scalar f[4];
+        } temp;
+        
+        if (trace > b3Scalar(0.0)) 
+        {
+            x = trace + b3Scalar(1.0);
 
 		union {
 			b3SimdFloat4 vec;
@@ -593,7 +666,7 @@ public:
 
 	b3Matrix3x3 scaled(const b3Vector3& s) const
 	{
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
+#if (defined (B3_USE_SSE_IN_API) && (defined (B3_USE_SSE) || defined (B3_USE_AVX)))|| defined (B3_USE_NEON)
 		return b3Matrix3x3(m_el[0] * s, m_el[1] * s, m_el[2] * s);
 #else
 		return b3Matrix3x3(
@@ -766,31 +839,54 @@ b3Matrix3x3::operator*=(const b3Matrix3x3& m)
 	rv01 = _mm_mul_ps(rv01, mv1);
 	rv02 = _mm_mul_ps(rv02, mv2);
 
-	// rv1
-	rv10 = b3_splat_ps(rv12, 0);
-	rv11 = b3_splat_ps(rv12, 1);
-	rv12 = b3_splat_ps(rv12, 2);
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+	__m256d rv00, rv01, rv02;
+	__m256d rv10, rv11, rv12;
+	__m256d rv20, rv21, rv22;
+	__m256d mv0, mv1, mv2;
 
-	rv10 = _mm_mul_ps(rv10, mv0);
-	rv11 = _mm_mul_ps(rv11, mv1);
-	rv12 = _mm_mul_ps(rv12, mv2);
+	rv02 = m_el[0].mVec128;
+	rv12 = m_el[1].mVec128;
+	rv22 = m_el[2].mVec128;
+
+	mv0 = _mm256_and_pd(m[0].mVec128, b3vFFF0fMask);
+	mv1 = _mm256_and_pd(m[1].mVec128, b3vFFF0fMask);
+	mv2 = _mm256_and_pd(m[2].mVec128, b3vFFF0fMask);
+
+	// rv0
+	rv00 = b3_splat_pd(rv02, 0);
+	rv01 = b3_splat_pd(rv02, 1);
+	rv02 = b3_splat_pd(rv02, 2);
+
+	rv00 = _mm256_mul_pd(rv00, mv0);
+	rv01 = _mm256_mul_pd(rv01, mv1);
+	rv02 = _mm256_mul_pd(rv02, mv2);
+
+	// rv1
+	rv10 = b3_splat_pd(rv12, 0);
+	rv11 = b3_splat_pd(rv12, 1);
+	rv12 = b3_splat_pd(rv12, 2);
+
+	rv10 = _mm256_mul_pd(rv10, mv0);
+	rv11 = _mm256_mul_pd(rv11, mv1);
+	rv12 = _mm256_mul_pd(rv12, mv2);
 
 	// rv2
-	rv20 = b3_splat_ps(rv22, 0);
-	rv21 = b3_splat_ps(rv22, 1);
-	rv22 = b3_splat_ps(rv22, 2);
+	rv20 = b3_splat_pd(rv22, 0);
+	rv21 = b3_splat_pd(rv22, 1);
+	rv22 = b3_splat_pd(rv22, 2);
 
-	rv20 = _mm_mul_ps(rv20, mv0);
-	rv21 = _mm_mul_ps(rv21, mv1);
-	rv22 = _mm_mul_ps(rv22, mv2);
+	rv20 = _mm256_mul_pd(rv20, mv0);
+	rv21 = _mm256_mul_pd(rv21, mv1);
+	rv22 = _mm256_mul_pd(rv22, mv2);
 
-	rv00 = _mm_add_ps(rv00, rv01);
-	rv10 = _mm_add_ps(rv10, rv11);
-	rv20 = _mm_add_ps(rv20, rv21);
+	rv00 = _mm256_add_pd(rv00, rv01);
+	rv10 = _mm256_add_pd(rv10, rv11);
+	rv20 = _mm256_add_pd(rv20, rv21);
 
-	m_el[0].mVec128 = _mm_add_ps(rv00, rv02);
-	m_el[1].mVec128 = _mm_add_ps(rv10, rv12);
-	m_el[2].mVec128 = _mm_add_ps(rv20, rv22);
+	m_el[0].mVec128 = _mm256_add_pd(rv00, rv02);
+	m_el[1].mVec128 = _mm256_add_pd(rv10, rv12);
+	m_el[2].mVec128 = _mm256_add_pd(rv20, rv22);
 
 #elif defined(B3_USE_NEON)
 
@@ -833,10 +929,10 @@ b3Matrix3x3::operator*=(const b3Matrix3x3& m)
 B3_FORCE_INLINE b3Matrix3x3&
 b3Matrix3x3::operator+=(const b3Matrix3x3& m)
 {
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
-	m_el[0].mVec128 = m_el[0].mVec128 + m.m_el[0].mVec128;
-	m_el[1].mVec128 = m_el[1].mVec128 + m.m_el[1].mVec128;
-	m_el[2].mVec128 = m_el[2].mVec128 + m.m_el[2].mVec128;
+#if (defined (B3_USE_SSE_IN_API) && (defined (B3_USE_SSE) || defined (B3_USE_AVX)))|| defined (B3_USE_NEON)
+    m_el[0].mVec128 = m_el[0].mVec128 + m.m_el[0].mVec128;
+    m_el[1].mVec128 = m_el[1].mVec128 + m.m_el[1].mVec128;
+    m_el[2].mVec128 = m_el[2].mVec128 + m.m_el[2].mVec128;
 #else
 	setValue(
 		m_el[0][0] + m.m_el[0][0],
@@ -861,6 +957,12 @@ operator*(const b3Matrix3x3& m, const b3Scalar& k)
 		_mm_mul_ps(m[0].mVec128, vk),
 		_mm_mul_ps(m[1].mVec128, vk),
 		_mm_mul_ps(m[2].mVec128, vk));
+#elif (defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX))
+    __m256d vk = _mm256_set1_pd(k);
+    return b3Matrix3x3(
+                _mm256_mul_pd(m[0].mVec128, vk), 
+                _mm256_mul_pd(m[1].mVec128, vk), 
+                _mm256_mul_pd(m[2].mVec128, vk)); 
 #elif defined(B3_USE_NEON)
 	return b3Matrix3x3(
 		vmulq_n_f32(m[0].mVec128, k),
@@ -877,7 +979,7 @@ operator*(const b3Matrix3x3& m, const b3Scalar& k)
 B3_FORCE_INLINE b3Matrix3x3
 operator+(const b3Matrix3x3& m1, const b3Matrix3x3& m2)
 {
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
+#if (defined (B3_USE_SSE_IN_API) && (defined (B3_USE_SSE) || defined (B3_USE_AVX)))|| defined (B3_USE_NEON)
 	return b3Matrix3x3(
 		m1[0].mVec128 + m2[0].mVec128,
 		m1[1].mVec128 + m2[1].mVec128,
@@ -901,7 +1003,7 @@ operator+(const b3Matrix3x3& m1, const b3Matrix3x3& m2)
 B3_FORCE_INLINE b3Matrix3x3
 operator-(const b3Matrix3x3& m1, const b3Matrix3x3& m2)
 {
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
+#if (defined (B3_USE_SSE_IN_API) && (defined (B3_USE_SSE) || defined (B3_USE_AVX)))|| defined (B3_USE_NEON)
 	return b3Matrix3x3(
 		m1[0].mVec128 - m2[0].mVec128,
 		m1[1].mVec128 - m2[1].mVec128,
@@ -925,10 +1027,10 @@ operator-(const b3Matrix3x3& m1, const b3Matrix3x3& m2)
 B3_FORCE_INLINE b3Matrix3x3&
 b3Matrix3x3::operator-=(const b3Matrix3x3& m)
 {
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
-	m_el[0].mVec128 = m_el[0].mVec128 - m.m_el[0].mVec128;
-	m_el[1].mVec128 = m_el[1].mVec128 - m.m_el[1].mVec128;
-	m_el[2].mVec128 = m_el[2].mVec128 - m.m_el[2].mVec128;
+#if (defined (B3_USE_SSE_IN_API) && (defined (B3_USE_SSE) || defined (B3_USE_AVX)))|| defined (B3_USE_NEON)
+    m_el[0].mVec128 = m_el[0].mVec128 - m.m_el[0].mVec128;
+    m_el[1].mVec128 = m_el[1].mVec128 - m.m_el[1].mVec128;
+    m_el[2].mVec128 = m_el[2].mVec128 - m.m_el[2].mVec128;
 #else
 	setValue(
 		m_el[0][0] - m.m_el[0][0],
@@ -958,6 +1060,11 @@ b3Matrix3x3::absolute() const
 		_mm_and_ps(m_el[0].mVec128, b3vAbsfMask),
 		_mm_and_ps(m_el[1].mVec128, b3vAbsfMask),
 		_mm_and_ps(m_el[2].mVec128, b3vAbsfMask));
+#elif (defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX))
+    return b3Matrix3x3(
+            _mm256_and_pd(m_el[0].mVec128, b3vAbsfMask),
+            _mm256_and_pd(m_el[1].mVec128, b3vAbsfMask),
+            _mm256_and_pd(m_el[2].mVec128, b3vAbsfMask));
 #elif defined(B3_USE_NEON)
 	return b3Matrix3x3(
 		(float32x4_t)vandq_s32((int32x4_t)m_el[0].mVec128, b3v3AbsMask),
@@ -990,6 +1097,27 @@ b3Matrix3x3::transpose() const
 	v2 = b3CastdTo128f(_mm_move_sd(b3CastfTo128d(v2), b3CastfTo128d(vT)));  // z0 z1 z2 0
 
 	return b3Matrix3x3(v0, v1, v2);
+
+
+#elif (defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX))
+	__m256d v0 = m_el[0].mVec128;
+	__m256d v1 = m_el[1].mVec128;
+	__m256d v2 = m_el[2].mVec128;    //  x2 y2 z2 w2
+	__m256d v3 = b3v1000;
+
+	__m256d tmp3, tmp2, tmp1, tmp0;
+		
+	tmp0 = _mm256_shuffle_pd(v0, v1, 0x0);
+	tmp2 = _mm256_shuffle_pd(v0, v1, 0xF);
+	tmp1 = _mm256_shuffle_pd(v2, v3, 0x0);
+	tmp3 = _mm256_shuffle_pd(v2, v3, 0xF);
+
+	v0 = _mm256_permute2f128_pd(tmp0, tmp1, 0x20);
+	v1 = _mm256_permute2f128_pd(tmp2, tmp3, 0x20);
+	v2 = _mm256_permute2f128_pd(tmp0, tmp1, 0x31);
+
+	return b3Matrix3x3(v0, v1, v2);
+
 #elif defined(B3_USE_NEON)
 	// note: zeros the w channel. We can preserve it at the cost of two more vtrn instructions.
 	static const uint32x2_t zMask = (const uint32x2_t){-1, 0};
@@ -1050,6 +1178,26 @@ b3Matrix3x3::transposeTimes(const b3Matrix3x3& m) const
 	r2 = _mm_add_ps(r2, _mm_mul_ps(m2, _mm_shuffle_ps(row, row, 0xaa)));
 	return b3Matrix3x3(r0, r1, r2);
 
+#elif (defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX))
+    // zeros w
+//    static const __m128i xyzMask = (const __m128i){ -1ULL, 0xffffffffULL };
+    __m256d row = m_el[0].mVec128;
+    __m256d m0 = _mm256_and_pd( m.getRow(0).mVec128, b3vFFF0fMask );
+    __m256d m1 = _mm256_and_pd( m.getRow(1).mVec128, b3vFFF0fMask);
+    __m256d m2 = _mm256_and_pd( m.getRow(2).mVec128, b3vFFF0fMask );
+    __m256d r0 = _mm256_mul_pd(m0, _mm256_permute4x64_pd(row, 0));
+    __m256d r1 = _mm256_mul_pd(m0, _mm256_permute4x64_pd(row, 0x55));
+    __m256d r2 = _mm256_mul_pd(m0, _mm256_permute4x64_pd(row, 0xaa));
+    row = m_el[1].mVec128;
+    r0 = _mm256_add_pd( r0, _mm256_mul_pd(m1, _mm256_permute4x64_pd(row, 0)));
+    r1 = _mm256_add_pd( r1, _mm256_mul_pd(m1, _mm256_permute4x64_pd(row, 0x55)));
+    r2 = _mm256_add_pd( r2, _mm256_mul_pd(m1, _mm256_permute4x64_pd(row, 0xaa)));
+    row = m_el[2].mVec128;
+    r0 = _mm256_add_pd( r0, _mm256_mul_pd(m2, _mm256_permute4x64_pd(row, 0)));
+    r1 = _mm256_add_pd( r1, _mm256_mul_pd(m2, _mm256_permute4x64_pd(row, 0x55)));
+    r2 = _mm256_add_pd( r2, _mm256_mul_pd(m2, _mm256_permute4x64_pd(row, 0xaa)));
+    return b3Matrix3x3( r0, r1, r2 );
+
 #elif defined B3_USE_NEON
 	// zeros w
 	static const uint32x4_t xyzMask = (const uint32x4_t){-1, -1, -1, 0};
@@ -1086,26 +1234,48 @@ b3Matrix3x3::transposeTimes(const b3Matrix3x3& m) const
 B3_FORCE_INLINE b3Matrix3x3
 b3Matrix3x3::timesTranspose(const b3Matrix3x3& m) const
 {
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE))
-	__m128 a0 = m_el[0].mVec128;
-	__m128 a1 = m_el[1].mVec128;
-	__m128 a2 = m_el[2].mVec128;
+#if (defined (B3_USE_SSE_IN_API) && defined (B3_USE_SSE))
+    __m128 a0 = m_el[0].mVec128;
+    __m128 a1 = m_el[1].mVec128;
+    __m128 a2 = m_el[2].mVec128;
+    
+    b3Matrix3x3 mT = m.transpose(); // we rely on transpose() zeroing w channel so that we don't have to do it here
+    __m128 mx = mT[0].mVec128;
+    __m128 my = mT[1].mVec128;
+    __m128 mz = mT[2].mVec128;
+    
+    __m128 r0 = _mm_mul_ps(mx, _mm_shuffle_ps(a0, a0, 0x00));
+    __m128 r1 = _mm_mul_ps(mx, _mm_shuffle_ps(a1, a1, 0x00));
+    __m128 r2 = _mm_mul_ps(mx, _mm_shuffle_ps(a2, a2, 0x00));
+    r0 = _mm_add_ps(r0, _mm_mul_ps(my, _mm_shuffle_ps(a0, a0, 0x55)));
+    r1 = _mm_add_ps(r1, _mm_mul_ps(my, _mm_shuffle_ps(a1, a1, 0x55)));
+    r2 = _mm_add_ps(r2, _mm_mul_ps(my, _mm_shuffle_ps(a2, a2, 0x55)));
+    r0 = _mm_add_ps(r0, _mm_mul_ps(mz, _mm_shuffle_ps(a0, a0, 0xaa)));
+    r1 = _mm_add_ps(r1, _mm_mul_ps(mz, _mm_shuffle_ps(a1, a1, 0xaa)));
+    r2 = _mm_add_ps(r2, _mm_mul_ps(mz, _mm_shuffle_ps(a2, a2, 0xaa)));
+    return b3Matrix3x3( r0, r1, r2);
 
-	b3Matrix3x3 mT = m.transpose();  // we rely on transpose() zeroing w channel so that we don't have to do it here
-	__m128 mx = mT[0].mVec128;
-	__m128 my = mT[1].mVec128;
-	__m128 mz = mT[2].mVec128;
+#elif (defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX))
+	__m256d a0 = m_el[0].mVec128;
+	__m256d a1 = m_el[1].mVec128;
+	__m256d a2 = m_el[2].mVec128;
 
-	__m128 r0 = _mm_mul_ps(mx, _mm_shuffle_ps(a0, a0, 0x00));
-	__m128 r1 = _mm_mul_ps(mx, _mm_shuffle_ps(a1, a1, 0x00));
-	__m128 r2 = _mm_mul_ps(mx, _mm_shuffle_ps(a2, a2, 0x00));
-	r0 = _mm_add_ps(r0, _mm_mul_ps(my, _mm_shuffle_ps(a0, a0, 0x55)));
-	r1 = _mm_add_ps(r1, _mm_mul_ps(my, _mm_shuffle_ps(a1, a1, 0x55)));
-	r2 = _mm_add_ps(r2, _mm_mul_ps(my, _mm_shuffle_ps(a2, a2, 0x55)));
-	r0 = _mm_add_ps(r0, _mm_mul_ps(mz, _mm_shuffle_ps(a0, a0, 0xaa)));
-	r1 = _mm_add_ps(r1, _mm_mul_ps(mz, _mm_shuffle_ps(a1, a1, 0xaa)));
-	r2 = _mm_add_ps(r2, _mm_mul_ps(mz, _mm_shuffle_ps(a2, a2, 0xaa)));
+	b3Matrix3x3 mT = m.transpose(); // we rely on transpose() zeroing w channel so that we don't have to do it here
+	__m256d mx = mT[0].mVec128;
+	__m256d my = mT[1].mVec128;
+	__m256d mz = mT[2].mVec128;
+
+	__m256d r0 = _mm256_mul_pd(mx, _mm256_permute4x64_pd(a0, 0x00));
+	__m256d r1 = _mm256_mul_pd(mx, _mm256_permute4x64_pd(a1, 0x00));
+	__m256d r2 = _mm256_mul_pd(mx, _mm256_permute4x64_pd(a2, 0x00));
+	r0 = _mm256_add_pd(r0, _mm256_mul_pd(my, _mm256_permute4x64_pd(a0, 0x55)));
+	r1 = _mm256_add_pd(r1, _mm256_mul_pd(my, _mm256_permute4x64_pd(a1, 0x55)));
+	r2 = _mm256_add_pd(r2, _mm256_mul_pd(my, _mm256_permute4x64_pd(a2, 0x55)));
+	r0 = _mm256_add_pd(r0, _mm256_mul_pd(mz, _mm256_permute4x64_pd(a0, 0xaa)));
+	r1 = _mm256_add_pd(r1, _mm256_mul_pd(mz, _mm256_permute4x64_pd(a1, 0xaa)));
+	r2 = _mm256_add_pd(r2, _mm256_mul_pd(mz, _mm256_permute4x64_pd(a2, 0xaa)));
 	return b3Matrix3x3(r0, r1, r2);
+
 
 #elif defined B3_USE_NEON
 	float32x4_t a0 = m_el[0].mVec128;
@@ -1139,8 +1309,8 @@ b3Matrix3x3::timesTranspose(const b3Matrix3x3& m) const
 B3_FORCE_INLINE b3Vector3
 operator*(const b3Matrix3x3& m, const b3Vector3& v)
 {
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
-	return v.dot3(m[0], m[1], m[2]);
+#if (defined (B3_USE_SSE_IN_API) && (defined (B3_USE_SSE) || defined (B3_USE_AVX)))|| defined (B3_USE_NEON)
+    return v.dot3(m[0], m[1], m[2]);
 #else
 	return b3MakeVector3(m[0].dot(v), m[1].dot(v), m[2].dot(v));
 #endif
@@ -1163,6 +1333,20 @@ operator*(const b3Vector3& v, const b3Matrix3x3& m)
 	c2 = _mm_mul_ps(c2, _mm_and_ps(m[2].mVec128, b3vFFF0fMask));
 
 	return b3MakeVector3(_mm_add_ps(c0, c2));
+#elif (defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX))
+
+    const __m256d vv = v.mVec128;
+
+	__m256d c0 = b3_splat_pd( vv, 0);
+	__m256d c1 = b3_splat_pd( vv, 1);
+	__m256d c2 = b3_splat_pd( vv, 2);
+
+    c0 = _mm256_mul_pd(c0, _mm256_and_pd(m[0].mVec128, b3vFFF0fMask) );
+    c1 = _mm256_mul_pd(c1, _mm256_and_pd(m[1].mVec128, b3vFFF0fMask) );
+    c0 = _mm256_add_pd(c0, c1);
+    c2 = _mm256_mul_pd(c2, _mm256_and_pd(m[2].mVec128, b3vFFF0fMask) );
+    
+    return b3MakeVector3(_mm256_add_pd(c0, c2));
 #elif defined(B3_USE_NEON)
 	const float32x4_t vv = v.mVec128;
 	const float32x2_t vlo = vget_low_f32(vv);
@@ -1195,43 +1379,49 @@ operator*(const b3Matrix3x3& m1, const b3Matrix3x3& m2)
 	__m128 m11 = m1[1].mVec128;
 	__m128 m12 = m1[2].mVec128;
 
-	__m128 m2v = _mm_and_ps(m2[0].mVec128, b3vFFF0fMask);
+#elif (defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX))
 
-	__m128 c0 = b3_splat_ps(m10, 0);
-	__m128 c1 = b3_splat_ps(m11, 0);
-	__m128 c2 = b3_splat_ps(m12, 0);
+	__m256d m10 = m1[0].mVec128;
+	__m256d m11 = m1[1].mVec128;
+	__m256d m12 = m1[2].mVec128;
 
-	c0 = _mm_mul_ps(c0, m2v);
-	c1 = _mm_mul_ps(c1, m2v);
-	c2 = _mm_mul_ps(c2, m2v);
+	__m256d m2v = _mm256_and_pd(m2[0].mVec128, b3vFFF0fMask);
 
-	m2v = _mm_and_ps(m2[1].mVec128, b3vFFF0fMask);
+	__m256d c0 = b3_splat_pd(m10, 0);
+	__m256d c1 = b3_splat_pd(m11, 0);
+	__m256d c2 = b3_splat_pd(m12, 0);
 
-	__m128 c0_1 = b3_splat_ps(m10, 1);
-	__m128 c1_1 = b3_splat_ps(m11, 1);
-	__m128 c2_1 = b3_splat_ps(m12, 1);
+	c0 = _mm256_mul_pd(c0, m2v);
+	c1 = _mm256_mul_pd(c1, m2v);
+	c2 = _mm256_mul_pd(c2, m2v);
 
-	c0_1 = _mm_mul_ps(c0_1, m2v);
-	c1_1 = _mm_mul_ps(c1_1, m2v);
-	c2_1 = _mm_mul_ps(c2_1, m2v);
+	m2v = _mm256_and_pd(m2[1].mVec128, b3vFFF0fMask);
 
-	m2v = _mm_and_ps(m2[2].mVec128, b3vFFF0fMask);
+	__m256d c0_1 = b3_splat_pd(m10, 1);
+	__m256d c1_1 = b3_splat_pd(m11, 1);
+	__m256d c2_1 = b3_splat_pd(m12, 1);
 
-	c0 = _mm_add_ps(c0, c0_1);
-	c1 = _mm_add_ps(c1, c1_1);
-	c2 = _mm_add_ps(c2, c2_1);
+	c0_1 = _mm256_mul_pd(c0_1, m2v);
+	c1_1 = _mm256_mul_pd(c1_1, m2v);
+	c2_1 = _mm256_mul_pd(c2_1, m2v);
 
-	m10 = b3_splat_ps(m10, 2);
-	m11 = b3_splat_ps(m11, 2);
-	m12 = b3_splat_ps(m12, 2);
+	m2v = _mm256_and_pd(m2[2].mVec128, b3vFFF0fMask);
 
-	m10 = _mm_mul_ps(m10, m2v);
-	m11 = _mm_mul_ps(m11, m2v);
-	m12 = _mm_mul_ps(m12, m2v);
+	c0 = _mm256_add_pd(c0, c0_1);
+	c1 = _mm256_add_pd(c1, c1_1);
+	c2 = _mm256_add_pd(c2, c2_1);
 
-	c0 = _mm_add_ps(c0, m10);
-	c1 = _mm_add_ps(c1, m11);
-	c2 = _mm_add_ps(c2, m12);
+	m10 = b3_splat_pd(m10, 2);
+	m11 = b3_splat_pd(m11, 2);
+	m12 = b3_splat_pd(m12, 2);
+
+	m10 = _mm256_mul_pd(m10, m2v);
+	m11 = _mm256_mul_pd(m11, m2v);
+	m12 = _mm256_mul_pd(m12, m2v);
+
+	c0 = _mm256_add_pd(c0, m10);
+	c1 = _mm256_add_pd(c1, m11);
+	c2 = _mm256_add_pd(c2, m12);
 
 	return b3Matrix3x3(c0, c1, c2);
 
@@ -1298,14 +1488,24 @@ B3_FORCE_INLINE bool operator==(const b3Matrix3x3& m1, const b3Matrix3x3& m2)
 	c1 = _mm_cmpeq_ps(m1[1].mVec128, m2[1].mVec128);
 	c2 = _mm_cmpeq_ps(m1[2].mVec128, m2[2].mVec128);
 
-	c0 = _mm_and_ps(c0, c1);
-	c0 = _mm_and_ps(c0, c2);
+    return (0x7 == _mm_movemask_ps((__m128)c0));
+#elif (defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX))
 
-	return (0x7 == _mm_movemask_ps((__m128)c0));
-#else
-	return (m1[0][0] == m2[0][0] && m1[1][0] == m2[1][0] && m1[2][0] == m2[2][0] &&
-			m1[0][1] == m2[0][1] && m1[1][1] == m2[1][1] && m1[2][1] == m2[2][1] &&
-			m1[0][2] == m2[0][2] && m1[1][2] == m2[1][2] && m1[2][2] == m2[2][2]);
+	__m256d c0, c1, c2;
+
+	c0 = _mm256_cmp_pd(m1[0].mVec128, m2[0].mVec128, _CMP_EQ_OQ);
+	c1 = _mm256_cmp_pd(m1[1].mVec128, m2[1].mVec128, _CMP_EQ_OQ);
+	c2 = _mm256_cmp_pd(m1[2].mVec128, m2[2].mVec128, _CMP_EQ_OQ);
+
+	c0 = _mm256_and_pd(c0, c1);
+	c0 = _mm256_and_pd(c0, c2);
+
+	return (0x7 == _mm256_movemask_pd((__m256d)c0));
+#else 
+	return 
+    (   m1[0][0] == m2[0][0] && m1[1][0] == m2[1][0] && m1[2][0] == m2[2][0] &&
+		m1[0][1] == m2[0][1] && m1[1][1] == m2[1][1] && m1[2][1] == m2[2][1] &&
+		m1[0][2] == m2[0][2] && m1[1][2] == m2[1][2] && m1[2][2] == m2[2][2] );
 #endif
 }
 

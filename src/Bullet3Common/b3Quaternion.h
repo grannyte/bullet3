@@ -24,10 +24,23 @@ const __m128 B3_ATTRIBUTE_ALIGNED16(b3vOnes) = {1.0f, 1.0f, 1.0f, 1.0f};
 
 #endif
 
+#ifdef B3_USE_AVX
+
+const __m256d B3_ATTRIBUTE_ALIGNED32(b3vOnes) = { 1.0, 1.0, 1.0, 1.0 };
+
+#endif
+
 #if defined(B3_USE_SSE) || defined(B3_USE_NEON)
 
 const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED16(b3vQInv) = {-0.0f, -0.0f, -0.0f, +0.0f};
 const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED16(b3vPPPM) = {+0.0f, +0.0f, +0.0f, -0.0f};
+
+#endif
+
+#ifdef B3_USE_AVX
+
+const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED32(b3vQInv) = { -0.0, -0.0, -0.0, +0.0 };
+const b3SimdFloat4 B3_ATTRIBUTE_ALIGNED32(b3vPPPM) = { +0.0, +0.0, +0.0, -0.0 };
 
 #endif
 
@@ -38,8 +51,8 @@ public:
 	/**@brief No initialization constructor */
 	b3Quaternion() {}
 
-#if (defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)) || defined(B3_USE_NEON)
-	// Set Vector
+#if (defined(B3_USE_SSE_IN_API) && (defined(B3_USE_SSE) || defined(B3_USE_AVX)))|| defined(B3_USE_NEON) 
+	// Set Vector 
 	B3_FORCE_INLINE b3Quaternion(const b3SimdFloat4 vec)
 	{
 		mVec128 = vec;
@@ -180,6 +193,8 @@ public:
 	{
 #if defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)
 		mVec128 = _mm_add_ps(mVec128, q.mVec128);
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		mVec128 = _mm256_add_pd(mVec128, q.mVec128);
 #elif defined(B3_USE_NEON)
 		mVec128 = vaddq_f32(mVec128, q.mVec128);
 #else
@@ -197,6 +212,8 @@ public:
 	{
 #if defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)
 		mVec128 = _mm_sub_ps(mVec128, q.mVec128);
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		mVec128 = _mm256_sub_pd(mVec128, q.mVec128);
 #elif defined(B3_USE_NEON)
 		mVec128 = vsubq_f32(mVec128, q.mVec128);
 #else
@@ -216,6 +233,9 @@ public:
 		__m128 vs = _mm_load_ss(&s);  //	(S 0 0 0)
 		vs = b3_pshufd_ps(vs, 0);     //	(S S S S)
 		mVec128 = _mm_mul_ps(mVec128, vs);
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		__m256d vs = _mm256_set1_pd(s);	//	(S S S S)
+		mVec128 = _mm256_mul_pd(mVec128, vs);
 #elif defined(B3_USE_NEON)
 		mVec128 = vmulq_n_f32(mVec128, s);
 #else
@@ -245,8 +265,33 @@ public:
 
 		A2 = A2 * B2;
 
-		B1 = b3_pshufd_ps(mVec128, B3_SHUFFLE(2, 0, 1, 2));
-		B2 = b3_pshufd_ps(vQ2, B3_SHUFFLE(1, 2, 0, 2));
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		__m256d vQ2 = q.get128();
+
+		__m256d A1 = b3_pshufd_pd(mVec128, B3_SHUFFLE(0, 1, 2, 0));
+		__m256d B1 = b3_pshufd_pd(vQ2, B3_SHUFFLE(3, 3, 3, 0));
+
+		A1 = A1 * B1;
+
+		__m256d A2 = b3_pshufd_pd(mVec128, B3_SHUFFLE(1, 2, 0, 1));
+		__m256d B2 = b3_pshufd_pd(vQ2, B3_SHUFFLE(2, 0, 1, 1));
+
+		A2 = A2 * B2;
+
+		B1 = b3_pshufd_pd(mVec128, B3_SHUFFLE(2, 0, 1, 2));
+		B2 = b3_pshufd_pd(vQ2, B3_SHUFFLE(1, 2, 0, 2));
+
+		B1 = B1 * B2;	//	A3 *= B3
+
+		mVec128 = b3_splat_pd(mVec128, 3);	//	A0
+		mVec128 = mVec128 * vQ2;	//	A0 * B0
+
+		A1 = A1 + A2;	//	AB12
+		mVec128 = mVec128 - B1;	//	AB03 = AB0 - AB3 
+		A1 = _mm256_xor_pd(A1, b3vPPPM);	//	change sign of the last element
+		mVec128 = mVec128 + A1;	//	AB03 + AB12
+
+#elif defined(B3_USE_NEON)     
 
 		B1 = B1 * B2;  //	A3 *= B3
 
@@ -326,6 +371,14 @@ public:
 		vd = _mm_add_ss(vd, t);
 
 		return _mm_cvtss_f32(vd);
+
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		__m256d xy = _mm256_mul_pd(mVec128, mVec128);
+		__m256d temp = _mm256_hadd_pd(xy, xy);
+		__m128d hi128 = _mm256_extractf128_pd(temp, 1);
+		__m128d dotproduct = _mm_add_pd(_mm256_castpd256_pd128(temp), hi128);
+		return _mm_cvtsd_f64(dotproduct);
+
 #elif defined(B3_USE_NEON)
 		float32x4_t vd = vmulq_f32(mVec128, q.mVec128);
 		float32x2_t x = vpadd_f32(vget_low_f32(vd), vget_high_f32(vd));
@@ -371,7 +424,17 @@ public:
 		mVec128 = _mm_mul_ps(mVec128, vd);
 
 		return *this;
-#else
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		__m256d xy = _mm256_mul_pd(mVec128, mVec128);
+		__m256d temp = _mm256_hadd_pd(xy, xy);
+		__m128d hi128 = _mm256_extractf128_pd(temp, 1);
+		__m128d lengthsq_2 = _mm_add_pd(_mm256_castpd256_pd128(temp), hi128);
+		__m128d length_2 = _mm_sqrt_pd(lengthsq_2);
+		__m256d length_4 = _mm256_broadcastsd_pd(length_2);
+		mVec128 = _mm256_div_pd(mVec128, length_4);
+
+		return *this;
+#else    
 		return *this /= length();
 #endif
 	}
@@ -386,6 +449,10 @@ public:
 		vs = b3_pshufd_ps(vs, 0x00);  //	(S S S S)
 
 		return b3Quaternion(_mm_mul_ps(mVec128, vs));
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		__m256d	vs = _mm256_set1_pd(s);	//	(S S S S)
+
+		return b3Quaternion(_mm256_mul_pd(mVec128, vs));
 #elif defined(B3_USE_NEON)
 		return b3Quaternion(vmulq_n_f32(mVec128, s));
 #else
@@ -445,6 +512,8 @@ public:
 	{
 #if defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)
 		return b3Quaternion(_mm_xor_ps(mVec128, b3vQInv));
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		return b3Quaternion(_mm256_xor_pd(mVec128, b3vQInv));
 #elif defined(B3_USE_NEON)
 		return b3Quaternion((b3SimdFloat4)veorq_s32((int32x4_t)mVec128, (int32x4_t)b3vQInv));
 #else
@@ -459,6 +528,8 @@ public:
 	{
 #if defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)
 		return b3Quaternion(_mm_add_ps(mVec128, q2.mVec128));
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		return b3Quaternion(_mm256_add_pd(mVec128, q2.mVec128));
 #elif defined(B3_USE_NEON)
 		return b3Quaternion(vaddq_f32(mVec128, q2.mVec128));
 #else
@@ -474,6 +545,8 @@ public:
 	{
 #if defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)
 		return b3Quaternion(_mm_sub_ps(mVec128, q2.mVec128));
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		return b3Quaternion(_mm256_sub_pd(mVec128, q2.mVec128));
 #elif defined(B3_USE_NEON)
 		return b3Quaternion(vsubq_f32(mVec128, q2.mVec128));
 #else
@@ -488,6 +561,8 @@ public:
 	{
 #if defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)
 		return b3Quaternion(_mm_xor_ps(mVec128, b3vMzeroMask));
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+		return b3Quaternion(_mm256_xor_pd(mVec128, b3vMzeroMask));
 #elif defined(B3_USE_NEON)
 		return b3Quaternion((b3SimdFloat4)veorq_s32((int32x4_t)mVec128, (int32x4_t)b3vMzeroMask));
 #else
@@ -593,7 +668,38 @@ operator*(const b3Quaternion& q1, const b3Quaternion& q2)
 
 	return b3Quaternion(A0);
 
-#elif defined(B3_USE_NEON)
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+	__m256d vQ1 = q1.get128();
+	__m256d vQ2 = q2.get128();
+	__m256d A0, A1, B1, A2, B2;
+
+	A1 = b3_pshufd_pd(vQ1, B3_SHUFFLE(0, 1, 2, 0)); // X Y  z x     //      vtrn
+	B1 = b3_pshufd_pd(vQ2, B3_SHUFFLE(3, 3, 3, 0)); // W W  W X     // vdup vext
+
+	A1 = A1 * B1;
+
+	A2 = b3_pshufd_pd(vQ1, B3_SHUFFLE(1, 2, 0, 1)); // Y Z  X Y     // vext 
+	B2 = b3_pshufd_pd(vQ2, B3_SHUFFLE(2, 0, 1, 1)); // z x  Y Y     // vtrn vdup
+
+	A2 = A2 * B2;
+
+	B1 = b3_pshufd_pd(vQ1, B3_SHUFFLE(2, 0, 1, 2)); // z x Y Z      // vtrn vext
+	B2 = b3_pshufd_pd(vQ2, B3_SHUFFLE(1, 2, 0, 2)); // Y Z x z      // vext vtrn
+
+	B1 = B1 * B2;	//	A3 *= B3
+
+	A0 = b3_splat_pd(vQ1, 3);	//	A0
+	A0 = A0 * vQ2;	//	A0 * B0
+
+	A1 = A1 + A2;	//	AB12
+	A0 = A0 - B1;	//	AB03 = AB0 - AB3 
+
+	A1 = _mm256_xor_pd(A1, b3vPPPM);	//	change sign of the last element
+	A0 = A0 + A1;	//	AB03 + AB12
+
+	return b3Quaternion(A0);
+
+#elif defined(B3_USE_NEON)     
 
 	float32x4_t vQ1 = q1.get128();
 	float32x4_t vQ2 = q2.get128();
@@ -675,6 +781,34 @@ operator*(const b3Quaternion& q, const b3Vector3& w)
 	A1 = A1 - A3;                  //	AB123 = AB12 - AB3
 
 	return b3Quaternion(A1);
+
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+	__m256d vQ1 = q.get128();
+	__m256d vQ2 = w.get128();
+	__m256d A1, B1, A2, B2, A3, B3;
+
+	A1 = b3_pshufd_pd(vQ1, B3_SHUFFLE(3, 3, 3, 0));
+	B1 = b3_pshufd_pd(vQ2, B3_SHUFFLE(0, 1, 2, 0));
+
+	A1 = A1 * B1;
+
+	A2 = b3_pshufd_pd(vQ1, B3_SHUFFLE(1, 2, 0, 1));
+	B2 = b3_pshufd_pd(vQ2, B3_SHUFFLE(2, 0, 1, 1));
+
+	A2 = A2 * B2;
+
+	A3 = b3_pshufd_pd(vQ1, B3_SHUFFLE(2, 0, 1, 2));
+	B3 = b3_pshufd_pd(vQ2, B3_SHUFFLE(1, 2, 0, 2));
+
+	A3 = A3 * B3;	//	A3 *= B3
+
+	A1 = A1 + A2;	//	AB12
+	A1 = _mm256_xor_pd(A1, b3vPPPM);	//	change sign of the last element
+	A1 = A1 - A3;	//	AB123 = AB12 - AB3 
+
+	return b3Quaternion(A1);
+
+#elif defined(B3_USE_NEON)     
 
 #elif defined(B3_USE_NEON)
 
@@ -759,7 +893,33 @@ operator*(const b3Vector3& w, const b3Quaternion& q)
 
 	return b3Quaternion(A1);
 
-#elif defined(B3_USE_NEON)
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+	__m256d vQ1 = w.get128();
+	__m256d vQ2 = q.get128();
+	__m256d A1, B1, A2, B2, A3, B3;
+
+	A1 = b3_pshufd_pd(vQ1, B3_SHUFFLE(0, 1, 2, 0));  // X Y  z x
+	B1 = b3_pshufd_pd(vQ2, B3_SHUFFLE(3, 3, 3, 0));  // W W  W X 
+
+	A1 = A1 * B1;
+
+	A2 = b3_pshufd_pd(vQ1, B3_SHUFFLE(1, 2, 0, 1));
+	B2 = b3_pshufd_pd(vQ2, B3_SHUFFLE(2, 0, 1, 1));
+
+	A2 = A2 * B2;
+
+	A3 = b3_pshufd_pd(vQ1, B3_SHUFFLE(2, 0, 1, 2));
+	B3 = b3_pshufd_pd(vQ2, B3_SHUFFLE(1, 2, 0, 2));
+
+	A3 = A3 * B3;	//	A3 *= B3
+
+	A1 = A1 + A2;	//	AB12
+	A1 = _mm256_xor_pd(A1, b3vPPPM);	//	change sign of the last element
+	A1 = A1 - A3;	//	AB123 = AB12 - AB3 
+
+	return b3Quaternion(A1);
+
+#elif defined(B3_USE_NEON)     
 
 	float32x4_t vQ1 = w.get128();
 	float32x4_t vQ2 = q.get128();
@@ -871,6 +1031,8 @@ b3QuatRotate(const b3Quaternion& rotation, const b3Vector3& v)
 	q *= rotation.inverse();
 #if defined(B3_USE_SSE_IN_API) && defined(B3_USE_SSE)
 	return b3MakeVector3(_mm_and_ps(q.get128(), b3vFFF0fMask));
+#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
+	return b3MakeVector3(_mm256_and_pd(q.get128(), b3vFFF0fMask));
 #elif defined(B3_USE_NEON)
 	return b3MakeVector3((float32x4_t)vandq_s32((int32x4_t)q.get128(), b3vFFF0Mask));
 #else

@@ -234,8 +234,8 @@ static inline void MycollideTT(const btDbvtNode* root0,
 		int treshold = btDbvt::DOUBLE_STACKSIZE - 4;
 		btAlignedObjectArray<btDbvt::sStkNN> stkStack;
 #ifdef USE_LOCAL_STACK
-		ATTRIBUTE_ALIGNED16(btDbvt::sStkNN localStack[btDbvt::DOUBLE_STACKSIZE]);
-		stkStack.initializeFromBuffer(&localStack, btDbvt::DOUBLE_STACKSIZE, btDbvt::DOUBLE_STACKSIZE);
+			ATTRIBUTE_ALIGNED_DEFAULT(btDbvt::sStkNN localStack[btDbvt::DOUBLE_STACKSIZE]);
+			stkStack.initializeFromBuffer(&localStack,btDbvt::DOUBLE_STACKSIZE,btDbvt::DOUBLE_STACKSIZE);
 #else
 		stkStack.resize(btDbvt::DOUBLE_STACKSIZE);
 #endif

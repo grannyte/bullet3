@@ -25,9 +25,9 @@ subject to the following restrictions:
 ///For color arguments the X,Y,Z components refer to Red, Green and Blue each in the range [0..1]
 class btIDebugDraw
 {
-public:
-	ATTRIBUTE_ALIGNED16(struct)
-	DefaultColors
+	public:
+
+	ATTRIBUTE_ALIGNED_DEFAULT(struct) DefaultColors
 	{
 		btVector3 m_activeObject;
 		btVector3 m_deactivatedObject;

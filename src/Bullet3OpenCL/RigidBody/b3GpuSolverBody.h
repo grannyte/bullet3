@@ -23,9 +23,10 @@ subject to the following restrictions:
 #include "Bullet3Common/b3TransformUtil.h"
 
 ///Until we get other contributions, only use SIMD on Windows, when using Visual Studio 2008 or later, and not double precision
-#ifdef B3_USE_SSE
+#if defined (B3_USE_SSE) || defined (B3_USE_AVX)
 #define USE_SIMD 1
-#endif  //
+#endif 
+
 
 ///The b3SolverBody is an internal datastructure for the constraint solver. Only necessary data is packed to increase cache coherence/performance.
 B3_ATTRIBUTE_ALIGNED16(struct)

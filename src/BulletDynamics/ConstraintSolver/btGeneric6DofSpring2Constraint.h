@@ -269,8 +269,8 @@ enum bt6DofFlags2
 };
 #define BT_6DOF_FLAGS_AXIS_SHIFT2 4  // bits per axis
 
-ATTRIBUTE_ALIGNED16(class)
-btGeneric6DofSpring2Constraint : public btTypedConstraint
+
+ATTRIBUTE_ALIGNED_DEFAULT(class) btGeneric6DofSpring2Constraint : public btTypedConstraint
 {
 protected:
 	btTransform m_frameInA;

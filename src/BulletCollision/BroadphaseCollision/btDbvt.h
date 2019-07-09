@@ -28,6 +28,7 @@ subject to the following restrictions:
 // Implementation profiles
 #define DBVT_IMPL_GENERIC 0  // Generic implementation
 #define DBVT_IMPL_SSE 1      // SSE
+#define DBVT_IMPL_AVX			2	// AVX
 
 // Template implementation of ICollide
 #ifdef _WIN32
@@ -59,6 +60,10 @@ subject to the following restrictions:
 #define DBVT_SELECT_IMPL DBVT_IMPL_SSE
 #define DBVT_MERGE_IMPL DBVT_IMPL_SSE
 #define DBVT_INT0_IMPL DBVT_IMPL_SSE
+#elif defined (BT_USE_AVX) //&& defined (_WIN32)
+#define DBVT_SELECT_IMPL		DBVT_IMPL_AVX
+#define DBVT_MERGE_IMPL			DBVT_IMPL_AVX
+#define DBVT_INT0_IMPL			DBVT_IMPL_AVX
 #else
 #define DBVT_SELECT_IMPL DBVT_IMPL_GENERIC
 #define DBVT_MERGE_IMPL DBVT_IMPL_GENERIC
@@ -69,6 +74,11 @@ subject to the following restrictions:
 	(DBVT_MERGE_IMPL == DBVT_IMPL_SSE) ||  \
 	(DBVT_INT0_IMPL == DBVT_IMPL_SSE)
 #include <emmintrin.h>
+#endif
+#if	(DBVT_SELECT_IMPL==DBVT_IMPL_AVX)||	\
+	(DBVT_MERGE_IMPL==DBVT_IMPL_AVX)||	\
+	(DBVT_INT0_IMPL==DBVT_IMPL_AVX)
+#include <immintrin.h>
 #endif
 
 //
@@ -621,22 +631,31 @@ DBVT_INLINE void btDbvtAabbMm::AddSpan(const btVector3& d, btScalar& smi, btScal
 DBVT_INLINE bool Intersect(const btDbvtAabbMm& a,
 						   const btDbvtAabbMm& b)
 {
-#if DBVT_INT0_IMPL == DBVT_IMPL_SSE
-	const __m128 rt(_mm_or_ps(_mm_cmplt_ps(_mm_load_ps(b.mx), _mm_load_ps(a.mi)),
-							  _mm_cmplt_ps(_mm_load_ps(a.mx), _mm_load_ps(b.mi))));
-#if defined(_WIN32)
-	const __int32* pu((const __int32*)&rt);
+#if	DBVT_INT0_IMPL == DBVT_IMPL_SSE
+	const __m128	rt(_mm_or_ps(_mm_cmplt_ps(_mm_load_ps(b.mx), _mm_load_ps(a.mi)),
+		_mm_cmplt_ps(_mm_load_ps(a.mx), _mm_load_ps(b.mi))));
+#if defined (_WIN32)
+	const __int32* pu((const __int32*)& rt);
 #else
-	const int* pu((const int*)&rt);
+	const int* pu((const int*)& rt);
 #endif
-	return ((pu[0] | pu[1] | pu[2]) == 0);
+	return((pu[0] | pu[1] | pu[2]) == 0);
+#elif	DBVT_INT0_IMPL == DBVT_IMPL_AVX
+	const __m256d	rt(_mm256_or_pd(_mm256_cmp_pd(_mm256_load_pd(b.mx), _mm256_load_pd(a.mi), _CMP_LT_OS),
+		_mm256_cmp_pd(_mm256_load_pd(a.mx), _mm256_load_pd(b.mi), _CMP_LT_OS)));
+#if defined (_WIN32)
+	const __int64* pu((const __int64*)& rt);
 #else
-	return ((a.mi.x() <= b.mx.x()) &&
-			(a.mx.x() >= b.mi.x()) &&
-			(a.mi.y() <= b.mx.y()) &&
-			(a.mx.y() >= b.mi.y()) &&
-			(a.mi.z() <= b.mx.z()) &&
-			(a.mx.z() >= b.mi.z()));
+	const long long int* pu((const long long int*)& rt);
+#endif
+	return((pu[0] | pu[1] | pu[2]) == 0);
+#else
+	return(	(a.mi.x()<=b.mx.x())&&
+		(a.mx.x()>=b.mi.x())&&
+		(a.mi.y()<=b.mx.y())&&
+		(a.mx.y()>=b.mi.y())&&
+		(a.mi.z()<=b.mx.z())&&		
+		(a.mx.z()>=b.mi.z()));
 #endif
 }
 
@@ -662,17 +681,29 @@ DBVT_INLINE btScalar Proximity(const btDbvtAabbMm& a,
 	return (btFabs(d.x()) + btFabs(d.y()) + btFabs(d.z()));
 }
 
+#if	DBVT_SELECT_IMPL == DBVT_IMPL_AVX
+DBVT_INLINE double hsum_double_avx(__m256d v) 
+{	
+	__m128d vlow = _mm256_castpd256_pd128(v);
+	__m128d vhigh = _mm256_extractf128_pd(v, 1);		// high 128
+	vlow = _mm_add_pd(vlow, vhigh);						// reduce down to 128
+
+	__m128d high64 = _mm_unpackhi_pd(vlow, vlow);
+	return  _mm_cvtsd_f64(_mm_add_sd(vlow, high64));	// reduce to scalar
+}
+#endif
+
 //
 DBVT_INLINE int Select(const btDbvtAabbMm& o,
 					   const btDbvtAabbMm& a,
 					   const btDbvtAabbMm& b)
 {
-#if DBVT_SELECT_IMPL == DBVT_IMPL_SSE
-
-#if defined(_WIN32)
-	static ATTRIBUTE_ALIGNED16(const unsigned __int32) mask[] = {0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff};
+#if	DBVT_SELECT_IMPL == DBVT_IMPL_SSE
+    
+#if defined (_WIN32)
+	static ATTRIBUTE_ALIGNED_DEFAULT(const unsigned __int32)	mask[]={0x7fffffff,0x7fffffff,0x7fffffff,0x7fffffff};
 #else
-	static ATTRIBUTE_ALIGNED16(const unsigned int) mask[] = {0x7fffffff, 0x7fffffff, 0x7fffffff, 0x00000000 /*0x7fffffff*/};
+    static ATTRIBUTE_ALIGNED_DEFAULT(const unsigned int)	mask[]={0x7fffffff,0x7fffffff,0x7fffffff,0x00000000 /*0x7fffffff*/};
 #endif
 	///@todo: the intrinsic version is 11% slower
 #if DBVT_USE_INTRINSIC_SSE
@@ -706,7 +737,7 @@ DBVT_INLINE int Select(const btDbvtAabbMm& o,
 	return tmp.ints[0] & 1;
 
 #else
-	ATTRIBUTE_ALIGNED16(__int32 r[1]);
+	ATTRIBUTE_ALIGNED_DEFAULT(__int32	r[1]);
 	__asm
 	{
 		mov		eax,o
@@ -736,6 +767,20 @@ DBVT_INLINE int Select(const btDbvtAabbMm& o,
 	}
 	return (r[0] & 1);
 #endif
+
+#elif	DBVT_SELECT_IMPL == DBVT_IMPL_AVX
+
+	__m256d sum_o = _mm256_add_pd(o.mi.mVec128, o.mx.mVec128);
+	__m256d sum_a = _mm256_add_pd(a.mi.mVec128, a.mx.mVec128);
+	__m256d sum_b = _mm256_add_pd(b.mi.mVec128, b.mx.mVec128);
+
+	__m256d doa = _mm256_sub_pd(sum_o, sum_a);
+	__m256d dob = _mm256_sub_pd(sum_o, sum_b);
+
+	__m256d doa_abs = _mm256_and_pd(doa, btvAbsfMask);
+	__m256d dob_abs = _mm256_and_pd(dob, btvAbsfMask);
+
+	return (hsum_double_avx(doa_abs) < hsum_double_avx(dob_abs) ? 0 : 1);
 #else
 	return (Proximity(o, a) < Proximity(o, b) ? 0 : 1);
 #endif
@@ -755,6 +800,15 @@ DBVT_INLINE void Merge(const btDbvtAabbMm& a,
 	amx = _mm_max_ps(amx, bmx);
 	_mm_store_ps(r.mi, ami);
 	_mm_store_ps(r.mx, amx);
+#elif DBVT_MERGE_IMPL==DBVT_IMPL_AVX
+	__m256d	ami(_mm256_load_pd(a.mi));
+	__m256d	amx(_mm256_load_pd(a.mx));
+	__m256d	bmi(_mm256_load_pd(b.mi));
+	__m256d	bmx(_mm256_load_pd(b.mx));
+	ami = _mm256_min_pd(ami, bmi);
+	amx = _mm256_max_pd(amx, bmx);
+	_mm256_store_pd(r.mi, ami);
+	_mm256_store_pd(r.mx, amx);
 #else
 	for (int i = 0; i < 3; ++i)
 	{
@@ -1152,9 +1206,8 @@ inline void btDbvt::collideTV(const btDbvtNode* root,
 	DBVT_CHECKTYPE
 	if (root)
 	{
-		ATTRIBUTE_ALIGNED16(btDbvtVolume)
-		volume(vol);
-		btAlignedObjectArray<const btDbvtNode*> stack;
+		ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)		volume(vol);
+		btAlignedObjectArray<const btDbvtNode*>	stack;
 		stack.resize(0);
 #ifndef BT_DISABLE_STACK_TEMP_MEMORY
 		char tempmemory[SIMPLE_STACKSIZE * sizeof(const btDbvtNode*)];
@@ -1194,8 +1247,7 @@ inline void btDbvt::collideTVNoStackAlloc(const btDbvtNode* root,
 	DBVT_CHECKTYPE
 	if (root)
 	{
-		ATTRIBUTE_ALIGNED16(btDbvtVolume)
-		volume(vol);
+		ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)		volume(vol);
 		stack.resize(0);
 		stack.reserve(SIMPLE_STACKSIZE);
 		stack.push_back(root);
@@ -1570,6 +1622,7 @@ inline void btDbvt::collideTU(const btDbvtNode* root,
 #undef DBVT_CHECKTYPE
 #undef DBVT_IMPL_GENERIC
 #undef DBVT_IMPL_SSE
+#undef DBVT_IMPL_AVX
 #undef DBVT_USE_INTRINSIC_SSE
 #undef DBVT_SELECT_IMPL
 #undef DBVT_MERGE_IMPL

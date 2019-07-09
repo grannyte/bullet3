@@ -20,8 +20,7 @@ subject to the following restrictions:
 
 ///The btScaledBvhTriangleMeshShape allows to instance a scaled version of an existing btBvhTriangleMeshShape.
 ///Note that each btBvhTriangleMeshShape still can have its own local scaling, independent from this btScaledBvhTriangleMeshShape 'localScaling'
-ATTRIBUTE_ALIGNED16(class)
-btScaledBvhTriangleMeshShape : public btConcaveShape
+ATTRIBUTE_ALIGNED_DEFAULT(class) btScaledBvhTriangleMeshShape : public btConcaveShape
 {
 	btVector3 m_localScaling;
 

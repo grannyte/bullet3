@@ -18,8 +18,7 @@ subject to the following restrictions:
 
 #include "btSequentialImpulseConstraintSolver.h"
 
-ATTRIBUTE_ALIGNED16(class)
-btNNCGConstraintSolver : public btSequentialImpulseConstraintSolver
+ATTRIBUTE_ALIGNED_DEFAULT(class) btNNCGConstraintSolver : public btSequentialImpulseConstraintSolver
 {
 protected:
 	btScalar m_deltafLengthSqrPrev;

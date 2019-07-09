@@ -753,7 +753,7 @@ void btSoftBody::addAeroForceToNode(const btVector3& windVelocity, int nodeIndex
 					fDrag = 0.5f * kDG * medium.m_density * rel_v2 * tri_area * n_dot_v * (-rel_v_nrm);
 
 					// Check angle of attack
-					// cos(10ยบ) = 0.98480
+					// cos(10บ) = 0.98480
 					if (0 < n_dot_v && n_dot_v < 0.98480f)
 						fLift = 0.5f * kLF * medium.m_density * rel_v_len * tri_area * btSqrt(1.0f - n_dot_v * n_dot_v) * (nrm.cross(rel_v_nrm).cross(rel_v_nrm));
 
@@ -839,7 +839,7 @@ void btSoftBody::addAeroForceToFace(const btVector3& windVelocity, int faceIndex
 				fDrag = 0.5f * kDG * medium.m_density * rel_v2 * tri_area * n_dot_v * (-rel_v_nrm);
 
 				// Check angle of attack
-				// cos(10ยบ) = 0.98480
+				// cos(10บ) = 0.98480
 				if (0 < n_dot_v && n_dot_v < 0.98480f)
 					fLift = 0.5f * kLF * medium.m_density * rel_v_len * tri_area * btSqrt(1.0f - n_dot_v * n_dot_v) * (nrm.cross(rel_v_nrm).cross(rel_v_nrm));
 
@@ -1033,8 +1033,10 @@ void btSoftBody::setVolumeDensity(btScalar density)
 //
 btVector3 btSoftBody::getLinearVelocity()
 {
-	btVector3 total_momentum = btVector3(0, 0, 0);
-	for (int i = 0; i < m_nodes.size(); ++i)
+	const btScalar	margin=getCollisionShape()->getMargin();
+	ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	vol;
+	
+	for(int i=0,ni=m_nodes.size();i<ni;++i)
 	{
 		btScalar mass = m_nodes[i].m_im == 0 ? 0 : 1.0 / m_nodes[i].m_im;
 		total_momentum += mass * m_nodes[i].m_v;
@@ -1146,7 +1148,10 @@ void btSoftBody::scale(const btVector3& scl)
 	ATTRIBUTE_ALIGNED16(btDbvtVolume)
 	vol;
 
-	for (int i = 0, ni = m_nodes.size(); i < ni; ++i)
+	const btScalar	margin=getCollisionShape()->getMargin();
+	ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	vol;
+	
+	for(int i=0,ni=m_nodes.size();i<ni;++i)
 	{
 		Node& n = m_nodes[i];
 		n.m_x *= scl;
@@ -2148,12 +2153,11 @@ void btSoftBody::predictMotion(btScalar dt)
 	}
 	/* Clusters                */
 	updateClusters();
-	/* Bounds                */
-	updateBounds();
-	/* Nodes                */
-	ATTRIBUTE_ALIGNED16(btDbvtVolume)
-	vol;
-	for (i = 0, ni = m_nodes.size(); i < ni; ++i)
+	/* Bounds				*/ 
+	updateBounds();	
+	/* Nodes				*/ 
+	ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	vol;
+	for(i=0,ni=m_nodes.size();i<ni;++i)
 	{
 		Node& n = m_nodes[i];
 		vol = btDbvtVolume::FromCR(n.m_x, m_sst.radmrg);
@@ -3338,11 +3342,10 @@ void btSoftBody::updateClusters()
 				{
 					mi.setMin(c.m_nodes[j]->m_x);
 					mx.setMax(c.m_nodes[j]->m_x);
-				}
-				ATTRIBUTE_ALIGNED16(btDbvtVolume)
-				bounds = btDbvtVolume::FromMM(mi, mx);
-				if (c.m_leaf)
-					m_cdbvt.update(c.m_leaf, bounds, c.m_lv * m_sst.sdt * 3, m_sst.radmrg);
+				}			
+				ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	bounds=btDbvtVolume::FromMM(mi,mx);
+				if(c.m_leaf)
+					m_cdbvt.update(c.m_leaf,bounds,c.m_lv*m_sst.sdt*3,m_sst.radmrg);
 				else
 					c.m_leaf = m_cdbvt.insert(bounds, &c);
 			}
@@ -4092,19 +4095,18 @@ void btSoftBody::defaultCollisionHandler(const btCollisionObjectWrapper* pcoWrap
 			btRigidBody* prb1 = (btRigidBody*)btRigidBody::upcast(pcoWrap->getCollisionObject());
 			btTransform wtr = pcoWrap->getWorldTransform();
 
-			const btTransform ctr = pcoWrap->getWorldTransform();
-			const btScalar timemargin = (wtr.getOrigin() - ctr.getOrigin()).length();
-			const btScalar basemargin = getCollisionShape()->getMargin();
-			btVector3 mins;
-			btVector3 maxs;
-			ATTRIBUTE_ALIGNED16(btDbvtVolume)
-			volume;
-			pcoWrap->getCollisionShape()->getAabb(pcoWrap->getWorldTransform(),
-												  mins,
-												  maxs);
-			volume = btDbvtVolume::FromMM(mins, maxs);
-			volume.Expand(btVector3(basemargin, basemargin, basemargin));
-			docollide.psb = this;
+			const btTransform	ctr=pcoWrap->getWorldTransform();
+			const btScalar		timemargin=(wtr.getOrigin()-ctr.getOrigin()).length();
+			const btScalar		basemargin=getCollisionShape()->getMargin();
+			btVector3			mins;
+			btVector3			maxs;
+			ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)		volume;
+			pcoWrap->getCollisionShape()->getAabb(	pcoWrap->getWorldTransform(),
+				mins,
+				maxs);
+			volume=btDbvtVolume::FromMM(mins,maxs);
+			volume.Expand(btVector3(basemargin,basemargin,basemargin));		
+			docollide.psb		=	this;
 			docollide.m_colObj1Wrap = pcoWrap;
 			docollide.m_rigidBody = prb1;
 

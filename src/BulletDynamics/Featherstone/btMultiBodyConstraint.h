@@ -52,8 +52,8 @@ struct btMultiBodyJacobianData
 	int m_fixedBodyId;
 };
 
-ATTRIBUTE_ALIGNED16(class)
-btMultiBodyConstraint
+
+ATTRIBUTE_ALIGNED_DEFAULT(class) btMultiBodyConstraint
 {
 protected:
 	btMultiBody* m_bodyA;

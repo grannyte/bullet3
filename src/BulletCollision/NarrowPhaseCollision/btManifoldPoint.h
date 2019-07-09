@@ -23,19 +23,17 @@ subject to the following restrictions:
 #include "physics_effects/base_level/solver/pfx_constraint_row.h"
 typedef sce::PhysicsEffects::PfxConstraintRow btConstraintRow;
 #else
-// Don't change following order of parameters
-ATTRIBUTE_ALIGNED16(struct)
-btConstraintRow
-{
-	btScalar m_normal[3];
-	btScalar m_rhs;
-	btScalar m_jacDiagInv;
-	btScalar m_lowerLimit;
-	btScalar m_upperLimit;
-	btScalar m_accumImpulse;
-};
-typedef btConstraintRow PfxConstraintRow;
-#endif  //PFX_USE_FREE_VECTORMATH
+	// Don't change following order of parameters
+	ATTRIBUTE_ALIGNED_DEFAULT(struct) btConstraintRow {
+		btScalar m_normal[3];
+		btScalar m_rhs;
+		btScalar m_jacDiagInv;
+		btScalar m_lowerLimit;
+		btScalar m_upperLimit;
+		btScalar m_accumImpulse;
+	};
+	typedef btConstraintRow PfxConstraintRow;
+#endif //PFX_USE_FREE_VECTORMATH
 
 enum btContactPointFlags
 {

@@ -23,8 +23,7 @@ subject to the following restrictions:
 
 ///The btMultiSphereShape represents the convex hull of a collection of spheres. You can create special capsules or other smooth volumes.
 ///It is possible to animate the spheres for deformation, but call 'recalcLocalAabb' after changing any sphere position/radius
-ATTRIBUTE_ALIGNED16(class)
-btMultiSphereShape : public btConvexInternalAabbCachingShape
+ATTRIBUTE_ALIGNED_DEFAULT(class) btMultiSphereShape : public btConvexInternalAabbCachingShape
 {
 	btAlignedObjectArray<btVector3> m_localPositionArray;
 	btAlignedObjectArray<btScalar> m_radiArray;

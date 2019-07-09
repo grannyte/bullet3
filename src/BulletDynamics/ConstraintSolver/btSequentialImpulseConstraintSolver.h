@@ -47,8 +47,7 @@ struct btSolverAnalyticsData
 };
 
 ///The btSequentialImpulseConstraintSolver is a fast SIMD implementation of the Projected Gauss Seidel (iterative LCP) method.
-ATTRIBUTE_ALIGNED16(class)
-btSequentialImpulseConstraintSolver : public btConstraintSolver
+ATTRIBUTE_ALIGNED_DEFAULT(class) btSequentialImpulseConstraintSolver : public btConstraintSolver
 {
 	
 
@@ -204,12 +203,14 @@ public:
 	btSingleConstraintRowSolver getScalarConstraintRowSolverGeneric();
 	btSingleConstraintRowSolver getSSE2ConstraintRowSolverGeneric();
 	btSingleConstraintRowSolver getSSE4_1ConstraintRowSolverGeneric();
+	btSingleConstraintRowSolver	getAVXConstraintRowSolverGeneric();
 
 	///Various implementations of solving a single constraint row using an inequality (lower limit) constraint, using scalar reference, SSE2 or SSE4
 	btSingleConstraintRowSolver getScalarConstraintRowSolverLowerLimit();
 	btSingleConstraintRowSolver getSSE2ConstraintRowSolverLowerLimit();
 	btSingleConstraintRowSolver getSSE4_1ConstraintRowSolverLowerLimit();
 	btSolverAnalyticsData m_analyticsData;
+	btSingleConstraintRowSolver	getAVXConstraintRowSolverLowerLimit();
 };
 
 #endif  //BT_SEQUENTIAL_IMPULSE_CONSTRAINT_SOLVER_H
