@@ -643,9 +643,6 @@ const btOverlappingPairCache* btDbvtBroadphase::getOverlappingPairCache() const
 //
 void btDbvtBroadphase::getBroadphaseAabb(btVector3& aabbMin, btVector3& aabbMax) const
 {
-	ATTRIBUTE_ALIGNED16(btDbvtVolume)
-	bounds;
-
 	ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	bounds;
 
 	if(!m_sets[0].empty())

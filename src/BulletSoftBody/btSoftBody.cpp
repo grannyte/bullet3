@@ -1035,7 +1035,8 @@ btVector3 btSoftBody::getLinearVelocity()
 {
 	const btScalar	margin=getCollisionShape()->getMargin();
 	ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	vol;
-	
+
+	btVector3 total_momentum = btVector3(0, 0, 0);
 	for(int i=0,ni=m_nodes.size();i<ni;++i)
 	{
 		btScalar mass = m_nodes[i].m_im == 0 ? 0 : 1.0 / m_nodes[i].m_im;
@@ -1144,10 +1145,6 @@ void btSoftBody::rotate(const btQuaternion& rot)
 //
 void btSoftBody::scale(const btVector3& scl)
 {
-	const btScalar margin = getCollisionShape()->getMargin();
-	ATTRIBUTE_ALIGNED16(btDbvtVolume)
-	vol;
-
 	const btScalar	margin=getCollisionShape()->getMargin();
 	ATTRIBUTE_ALIGNED_DEFAULT(btDbvtVolume)	vol;
 	

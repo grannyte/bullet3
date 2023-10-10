@@ -1185,8 +1185,6 @@ TODO_AVX
     #endif
     if( array_count < scalar_cutoff )	
 #endif
-	if (array_count < scalar_cutoff)
-#endif
 	{
 		btScalar maxDot1 = -SIMD_INFINITY;
 		int i = 0;
@@ -1227,9 +1225,6 @@ TODO_AVX
     #endif
     
     if( array_count < scalar_cutoff )
-#endif
-
-	if (array_count < scalar_cutoff)
 #endif
 	{
 		btScalar minDot = SIMD_INFINITY;

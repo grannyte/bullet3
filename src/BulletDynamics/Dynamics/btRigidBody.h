@@ -93,13 +93,6 @@ class btRigidBody : public btCollisionObject
 	int m_debugBodyId;
 
 protected:
-	ATTRIBUTE_ALIGNED16(btVector3 m_deltaLinearVelocity);
-	btVector3 m_deltaAngularVelocity;
-	btVector3 m_angularFactor;
-	btVector3 m_invMass;
-	btVector3 m_pushVelocity;
-	btVector3 m_turnVelocity;
-
 	ATTRIBUTE_ALIGNED_DEFAULT(btVector3		m_deltaLinearVelocity);
 	btVector3		m_deltaAngularVelocity;
 	btVector3		m_angularFactor;

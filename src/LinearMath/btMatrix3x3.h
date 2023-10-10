@@ -20,13 +20,9 @@ subject to the following restrictions:
 #include <stdio.h>
 
 #ifdef BT_USE_SSE
-//const __m128 ATTRIBUTE_ALIGNED_DEFAULT(v2220) = {2.0f, 2.0f, 2.0f, 0.0f};
-//const __m128 ATTRIBUTE_ALIGNED_DEFAULT(vMPPP) = {-0.0f, +0.0f, +0.0f, +0.0f};
+//const __m128 ATTRIBUTE_ALIGNED16(v2220) = {2.0f, 2.0f, 2.0f, 0.0f};
+//const __m128 ATTRIBUTE_ALIGNED16(vMPPP) = {-0.0f, +0.0f, +0.0f, +0.0f};
 #define vMPPP (_mm_set_ps(+0.0f, +0.0f, +0.0f, -0.0f))
-#endif
-
-#if  defined (BT_USE_AVX)
-const __m256d ATTRIBUTE_ALIGNED32(vMPPP) = { -0.0, +0.0, +0.0, +0.0 };
 #endif
 
 #if defined(BT_USE_SSE)
@@ -34,14 +30,11 @@ const __m256d ATTRIBUTE_ALIGNED32(vMPPP) = { -0.0, +0.0, +0.0, +0.0 };
 #define v1000 (_mm_set_ps(0.0f, 0.0f, 0.0f, 1.0f))
 #define v0100 (_mm_set_ps(0.0f, 0.0f, 1.0f, 0.0f))
 #define v0010 (_mm_set_ps(0.0f, 1.0f, 0.0f, 0.0f))
-#elif  defined(BT_USE_AVX)
-#define v1000 (_mm256_set_pd(0.0,0.0,0.0,1.0))
-#define v0100 (_mm256_set_pd(0.0,0.0,1.0,0.0))
-#define v0010 (_mm256_set_pd(0.0,1.0,0.0,0.0))
 #elif defined(BT_USE_NEON)
-const btSimdFloat4 ATTRIBUTE_ALIGNED_DEFAULT(v1000) = {1.0f, 0.0f, 0.0f, 0.0f};
-const btSimdFloat4 ATTRIBUTE_ALIGNED_DEFAULT(v0100) = {0.0f, 1.0f, 0.0f, 0.0f};
-const btSimdFloat4 ATTRIBUTE_ALIGNED_DEFAULT(v0010) = {0.0f, 0.0f, 1.0f, 0.0f};
+const btSimdFloat4 ATTRIBUTE_ALIGNED16(v0000) = {0.0f, 0.0f, 0.0f, 0.0f};
+const btSimdFloat4 ATTRIBUTE_ALIGNED16(v1000) = {1.0f, 0.0f, 0.0f, 0.0f};
+const btSimdFloat4 ATTRIBUTE_ALIGNED16(v0100) = {0.0f, 1.0f, 0.0f, 0.0f};
+const btSimdFloat4 ATTRIBUTE_ALIGNED16(v0010) = {0.0f, 0.0f, 1.0f, 0.0f};
 #endif
 
 #ifdef BT_USE_DOUBLE_PRECISION
@@ -52,8 +45,9 @@ const btSimdFloat4 ATTRIBUTE_ALIGNED_DEFAULT(v0010) = {0.0f, 0.0f, 1.0f, 0.0f};
 
 /**@brief The btMatrix3x3 class implements a 3x3 rotation matrix, to perform linear algebra in combination with btQuaternion, btTransform and btVector3.
 * Make sure to only include a pure orthogonal matrix without scaling. */
-ATTRIBUTE_ALIGNED_DEFAULT(class) btMatrix3x3 {
-
+ATTRIBUTE_ALIGNED16(class)
+btMatrix3x3
+{
 	///Data storage for the matrix, each vector is a row of the matrix
 	btVector3 m_el[3];
 
@@ -82,8 +76,8 @@ public:
 				 zx, zy, zz);
 	}
 
-#if (defined (BT_USE_SSE_IN_API) && (defined (BT_USE_SSE) || defined (BT_USE_AVX)))|| defined (BT_USE_NEON)
-	SIMD_FORCE_INLINE btMatrix3x3 (const btSimdFloat4 v0, const btSimdFloat4 v1, const btSimdFloat4 v2 ) 
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE)) || defined(BT_USE_NEON)
+	SIMD_FORCE_INLINE btMatrix3x3(const btSimdFloat4 v0, const btSimdFloat4 v1, const btSimdFloat4 v2)
 	{
 		m_el[0].mVec128 = v0;
 		m_el[1].mVec128 = v1;
@@ -262,61 +256,7 @@ public:
 		V2 = V2 + V21;
 		V3 = V3 + V31;
 
-        vs = bt_splat3_ps(vs, 0);
-            //	s ready
-        V1 = V1 * vs;
-        V2 = V2 * vs;
-        V3 = V3 * vs;
-        
-        V1 = V1 + v1000;
-        V2 = V2 + v0100;
-        V3 = V3 + v0010;
-        
-        m_el[0] = V1; 
-        m_el[1] = V2;
-        m_el[2] = V3;
-
-	/* TODO_AVX
-    #elif defined BT_USE_SIMD_VECTOR3 && defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX)
-		__m256d	vs, Q = q.get128();
-		__m256i Qi = btCastdTo256i(Q);
-		__m256d	Y, Z;
-		__m256d	V1, V2, V3;
-		__m256d	V11, V21, V31;
-		__m256d	NQ = _mm256_xor_pd(Q, btvMzeroMask);
-		__m256i NQi = btCastdTo256i(NQ);
-
-		V1 = btCastiTo256d(_mm256_shuffle_epi32(Qi, BT_SHUFFLE(1, 0, 2, 3)));	// Y X Z W
-		V2 = __mm256_shuffle_pd(NQ, Q, BT_SHUFFLE(0, 0, 1, 3));     // -X -X  Y  W
-		V3 = btCastiTo256d(_mm256_shuffle_epi32(Qi, BT_SHUFFLE(2, 1, 0, 3)));	// Z Y X W
-		V1 = _mm256_xor_pd(V1, vMPPP);	//	change the sign of the first element
-
-		V11 = btCastiTo256d(_mm256_shuffle_epi32(Qi, BT_SHUFFLE(1, 1, 0, 3)));	// Y Y X W
-		V21 = _mm256_unpackhi_pd(Q, Q);                    //  Z  Z  W  W
-		V31 = __mm256_shuffle_pd(Q, NQ, BT_SHUFFLE(0, 2, 0, 3));	//  X  Z -X -W
-
-		V2 = V2 * V1;	//
-		V1 = V1 * V11;	//
-		V3 = V3 * V31;	//
-
-		V11 = __mm256_shuffle_pd(NQ, Q, BT_SHUFFLE(2, 3, 1, 3));	//	-Z -W  Y  W
-		V11 = V11 * V21;	//
-		V21 = _mm256_xor_pd(V21, vMPPP);	//	change the sign of the first element
-		V31 = __mm256_shuffle_pd(Q, NQ, BT_SHUFFLE(3, 3, 1, 3));	//	 W  W -Y -W
-		V31 = _mm256_xor_pd(V31, vMPPP);	//	change the sign of the first element
-		Y = btCastiTo256d(_mm256_shuffle_epi32(NQi, BT_SHUFFLE(3, 2, 0, 3)));	// -W -Z -X -W
-		Z = btCastiTo256d(_mm256_shuffle_epi32(Qi, BT_SHUFFLE(1, 0, 1, 3)));	//  Y  X  Y  W
-
-		//vs = _mm_load_ss(&s);
-		vs = _mm256_set1_pd(s);
-		V21 = V21 * Y;
-		V31 = V31 * Z;
-
-		V1 = V1 + V11;
-		V2 = V2 + V21;
-		V3 = V3 + V31;
-
-		//vs = b3_splat3_ps(vs, 0);
+		vs = bt_splat3_ps(vs, 0);
 		//	s ready
 		V1 = V1 * vs;
 		V2 = V2 * vs;
@@ -329,12 +269,11 @@ public:
 		m_el[0] = V1;
 		m_el[1] = V2;
 		m_el[2] = V3;
-	*/
-    #else    
-		btScalar xs = q.x() * s,   ys = q.y() * s,   zs = q.z() * s;
-		btScalar wx = q.w() * xs,  wy = q.w() * ys,  wz = q.w() * zs;
-		btScalar xx = q.x() * xs,  xy = q.x() * ys,  xz = q.x() * zs;
-		btScalar yy = q.y() * ys,  yz = q.y() * zs,  zz = q.z() * zs;
+#else
+		btScalar xs = q.x() * s, ys = q.y() * s, zs = q.z() * s;
+		btScalar wx = q.w() * xs, wy = q.w() * ys, wz = q.w() * zs;
+		btScalar xx = q.x() * xs, xy = q.x() * ys, xz = q.x() * zs;
+		btScalar yy = q.y() * ys, yz = q.y() * zs, zz = q.z() * zs;
 		setValue(
 			btScalar(1.0) - (yy + zz), xy - wz, xz + wy,
 			xy + wz, btScalar(1.0) - (xx + zz), yz - wx,
@@ -382,11 +321,11 @@ public:
 
 	/**@brief Set the matrix to the identity */
 	void setIdentity()
-	{ 
-#if (defined(BT_USE_SSE_IN_API)&& (defined (BT_USE_SSE) || defined (BT_USE_AVX))) || defined(BT_USE_NEON)
-			m_el[0] = v1000; 
-			m_el[1] = v0100;
-			m_el[2] = v0010;
+	{
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE)) || defined(BT_USE_NEON)
+		m_el[0] = v1000;
+		m_el[1] = v0100;
+		m_el[2] = v0010;
 #else
 		setValue(btScalar(1.0), btScalar(0.0), btScalar(0.0),
 				 btScalar(0.0), btScalar(1.0), btScalar(0.0),
@@ -410,9 +349,9 @@ public:
 
 	static const btMatrix3x3& getIdentity()
 	{
-#if (defined(BT_USE_SSE_IN_API)&& (defined (BT_USE_SSE) || defined (BT_USE_AVX))) || defined(BT_USE_NEON)
-        static const btMatrix3x3 
-        identityMatrix(v1000, v0100, v0010);
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE)) || defined(BT_USE_NEON)
+		static const btMatrix3x3
+			identityMatrix(v1000, v0100, v0010);
 #else
 		static const btMatrix3x3
 			identityMatrix(
@@ -446,10 +385,6 @@ public:
 		vm[0] = v0;
 		vm[1] = v1;
 		vm[2] = v2;
-/* 
-#elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
-TODO_AVX
-*/
 #elif defined(BT_USE_NEON)
 		// note: zeros the w channel. We can preserve it at the cost of two more vtrn instructions.
 		static const uint32x2_t zMask = (const uint32x2_t){static_cast<uint32_t>(-1), 0};
@@ -484,18 +419,9 @@ TODO_AVX
 	* @param q The quaternion which will be set */
 	void getRotation(btQuaternion & q) const
 	{
-#if (defined (BT_USE_SSE_IN_API) && (defined (BT_USE_SSE) || defined (BT_USE_AVX)))|| defined (BT_USE_NEON)
-        btScalar trace = m_el[0].x() + m_el[1].y() + m_el[2].z();
-        btScalar s, x;
-        
-        union {
-            btSimdFloat4 vec;
-            btScalar f[4];
-        } temp;
-        
-        if (trace > btScalar(0.0)) 
-        {
-            x = trace + btScalar(1.0);
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE)) || defined(BT_USE_NEON)
+		btScalar trace = m_el[0].x() + m_el[1].y() + m_el[2].z();
+		btScalar s, x;
 
 		union {
 			btSimdFloat4 vec;
@@ -695,7 +621,7 @@ TODO_AVX
 
 	btMatrix3x3 scaled(const btVector3& s) const
 	{
-#if (defined (BT_USE_SSE_IN_API) && (defined (BT_USE_SSE) || defined (BT_USE_AVX)))|| defined (BT_USE_NEON)
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE)) || defined(BT_USE_NEON)
 		return btMatrix3x3(m_el[0] * s, m_el[1] * s, m_el[2] * s);
 #else
 		return btMatrix3x3(
@@ -914,54 +840,31 @@ btMatrix3x3::operator*=(const btMatrix3x3& m)
 	rv01 = _mm_mul_ps(rv01, mv1);
 	rv02 = _mm_mul_ps(rv02, mv2);
 
-#elif  defined BT_USE_SIMD_VECTOR3 && defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX)
-	__m256d rv00, rv01, rv02;
-	__m256d rv10, rv11, rv12;
-	__m256d rv20, rv21, rv22;
-	__m256d mv0, mv1, mv2;
-
-	rv02 = m_el[0].mVec128;
-	rv12 = m_el[1].mVec128;
-	rv22 = m_el[2].mVec128;
-
-	mv0 = _mm256_and_pd(m[0].mVec128, btvFFF0fMask);
-	mv1 = _mm256_and_pd(m[1].mVec128, btvFFF0fMask);
-	mv2 = _mm256_and_pd(m[2].mVec128, btvFFF0fMask);
-
-	// rv0
-	rv00 = bt_splat_pd(rv02, 0);
-	rv01 = bt_splat_pd(rv02, 1);
-	rv02 = bt_splat_pd(rv02, 2);
-
-	rv00 = _mm256_mul_pd(rv00, mv0);
-	rv01 = _mm256_mul_pd(rv01, mv1);
-	rv02 = _mm256_mul_pd(rv02, mv2);
-
 	// rv1
-	rv10 = bt_splat_pd(rv12, 0);
-	rv11 = bt_splat_pd(rv12, 1);
-	rv12 = bt_splat_pd(rv12, 2);
+	rv10 = bt_splat_ps(rv12, 0);
+	rv11 = bt_splat_ps(rv12, 1);
+	rv12 = bt_splat_ps(rv12, 2);
 
-	rv10 = _mm256_mul_pd(rv10, mv0);
-	rv11 = _mm256_mul_pd(rv11, mv1);
-	rv12 = _mm256_mul_pd(rv12, mv2);
+	rv10 = _mm_mul_ps(rv10, mv0);
+	rv11 = _mm_mul_ps(rv11, mv1);
+	rv12 = _mm_mul_ps(rv12, mv2);
 
 	// rv2
-	rv20 = bt_splat_pd(rv22, 0);
-	rv21 = bt_splat_pd(rv22, 1);
-	rv22 = bt_splat_pd(rv22, 2);
+	rv20 = bt_splat_ps(rv22, 0);
+	rv21 = bt_splat_ps(rv22, 1);
+	rv22 = bt_splat_ps(rv22, 2);
 
-	rv20 = _mm256_mul_pd(rv20, mv0);
-	rv21 = _mm256_mul_pd(rv21, mv1);
-	rv22 = _mm256_mul_pd(rv22, mv2);
+	rv20 = _mm_mul_ps(rv20, mv0);
+	rv21 = _mm_mul_ps(rv21, mv1);
+	rv22 = _mm_mul_ps(rv22, mv2);
 
-	rv00 = _mm256_add_pd(rv00, rv01);
-	rv10 = _mm256_add_pd(rv10, rv11);
-	rv20 = _mm256_add_pd(rv20, rv21);
+	rv00 = _mm_add_ps(rv00, rv01);
+	rv10 = _mm_add_ps(rv10, rv11);
+	rv20 = _mm_add_ps(rv20, rv21);
 
-	m_el[0].mVec128 = _mm256_add_pd(rv00, rv02);
-	m_el[1].mVec128 = _mm256_add_pd(rv10, rv12);
-	m_el[2].mVec128 = _mm256_add_pd(rv20, rv22);
+	m_el[0].mVec128 = _mm_add_ps(rv00, rv02);
+	m_el[1].mVec128 = _mm_add_ps(rv10, rv12);
+	m_el[2].mVec128 = _mm_add_ps(rv20, rv22);
 
 #elif defined(BT_USE_NEON)
 
@@ -1004,10 +907,10 @@ btMatrix3x3::operator*=(const btMatrix3x3& m)
 SIMD_FORCE_INLINE btMatrix3x3&
 btMatrix3x3::operator+=(const btMatrix3x3& m)
 {
-#if (defined (BT_USE_SSE_IN_API) && (defined (BT_USE_SSE) || defined (BT_USE_AVX)))|| defined (BT_USE_NEON)
-    m_el[0].mVec128 = m_el[0].mVec128 + m.m_el[0].mVec128;
-    m_el[1].mVec128 = m_el[1].mVec128 + m.m_el[1].mVec128;
-    m_el[2].mVec128 = m_el[2].mVec128 + m.m_el[2].mVec128;
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE)) || defined(BT_USE_NEON)
+	m_el[0].mVec128 = m_el[0].mVec128 + m.m_el[0].mVec128;
+	m_el[1].mVec128 = m_el[1].mVec128 + m.m_el[1].mVec128;
+	m_el[2].mVec128 = m_el[2].mVec128 + m.m_el[2].mVec128;
 #else
 	setValue(
 		m_el[0][0] + m.m_el[0][0],
@@ -1032,12 +935,6 @@ operator*(const btMatrix3x3& m, const btScalar& k)
 		_mm_mul_ps(m[0].mVec128, vk),
 		_mm_mul_ps(m[1].mVec128, vk),
 		_mm_mul_ps(m[2].mVec128, vk));
-#elif (defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX))
-	__m256d vk = _mm256_set1_pd(k);
-	return btMatrix3x3(
-				_mm256_mul_pd(m[0].mVec128, vk),
-				_mm256_mul_pd(m[1].mVec128, vk),
-				_mm256_mul_pd(m[2].mVec128, vk));
 #elif defined(BT_USE_NEON)
 	return btMatrix3x3(
 		vmulq_n_f32(m[0].mVec128, k),
@@ -1054,7 +951,7 @@ operator*(const btMatrix3x3& m, const btScalar& k)
 SIMD_FORCE_INLINE btMatrix3x3
 operator+(const btMatrix3x3& m1, const btMatrix3x3& m2)
 {
-#if (defined (BT_USE_SSE_IN_API) && (defined (BT_USE_SSE) || defined (BT_USE_AVX)))|| defined (BT_USE_NEON)
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE)) || defined(BT_USE_NEON)
 	return btMatrix3x3(
 		m1[0].mVec128 + m2[0].mVec128,
 		m1[1].mVec128 + m2[1].mVec128,
@@ -1078,7 +975,7 @@ operator+(const btMatrix3x3& m1, const btMatrix3x3& m2)
 SIMD_FORCE_INLINE btMatrix3x3
 operator-(const btMatrix3x3& m1, const btMatrix3x3& m2)
 {
-#if (defined (BT_USE_SSE_IN_API) && (defined (BT_USE_SSE) || defined (BT_USE_AVX)))|| defined (BT_USE_NEON)
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE)) || defined(BT_USE_NEON)
 	return btMatrix3x3(
 		m1[0].mVec128 - m2[0].mVec128,
 		m1[1].mVec128 - m2[1].mVec128,
@@ -1102,10 +999,10 @@ operator-(const btMatrix3x3& m1, const btMatrix3x3& m2)
 SIMD_FORCE_INLINE btMatrix3x3&
 btMatrix3x3::operator-=(const btMatrix3x3& m)
 {
-#if (defined (BT_USE_SSE_IN_API) && (defined (BT_USE_SSE) || defined (BT_USE_AVX)))|| defined (BT_USE_NEON)
-    m_el[0].mVec128 = m_el[0].mVec128 - m.m_el[0].mVec128;
-    m_el[1].mVec128 = m_el[1].mVec128 - m.m_el[1].mVec128;
-    m_el[2].mVec128 = m_el[2].mVec128 - m.m_el[2].mVec128;
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE)) || defined(BT_USE_NEON)
+	m_el[0].mVec128 = m_el[0].mVec128 - m.m_el[0].mVec128;
+	m_el[1].mVec128 = m_el[1].mVec128 - m.m_el[1].mVec128;
+	m_el[2].mVec128 = m_el[2].mVec128 - m.m_el[2].mVec128;
 #else
 	setValue(
 		m_el[0][0] - m.m_el[0][0],
@@ -1135,11 +1032,6 @@ btMatrix3x3::absolute() const
 		_mm_and_ps(m_el[0].mVec128, btvAbsfMask),
 		_mm_and_ps(m_el[1].mVec128, btvAbsfMask),
 		_mm_and_ps(m_el[2].mVec128, btvAbsfMask));
-#elif defined BT_USE_SIMD_VECTOR3 && (defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX))
-    return btMatrix3x3(
-            _mm256_and_pd(m_el[0].mVec128, btvAbsfMask),
-            _mm256_and_pd(m_el[1].mVec128, btvAbsfMask),
-            _mm256_and_pd(m_el[2].mVec128, btvAbsfMask));
 #elif defined(BT_USE_NEON)
 	return btMatrix3x3(
 		(float32x4_t)vandq_s32((int32x4_t)m_el[0].mVec128, btv3AbsMask),
@@ -1164,27 +1056,14 @@ btMatrix3x3::transpose() const
 
 	v2 = _mm_and_ps(v2, btvFFF0fMask);  //  x2 y2 z2 0
 
-    return btMatrix3x3( v0, v1, v2 );
+	vT = _mm_unpackhi_ps(v0, v1);  //	z0 z1 * *
+	v0 = _mm_unpacklo_ps(v0, v1);  //	x0 x1 y0 y1
 
-#elif defined BT_USE_SIMD_VECTOR3 && (defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX))
-	__m256d v0 = m_el[0].mVec128;
-	__m256d v1 = m_el[1].mVec128;
-	__m256d v2 = m_el[2].mVec128;    //  x2 y2 z2 w2
-	__m256d v3 = v1000;
-
-	__m256d tmp3, tmp2, tmp1, tmp0;
-
-	tmp0 = _mm256_shuffle_pd(v0, v1, 0x0);
-	tmp2 = _mm256_shuffle_pd(v0, v1, 0xF);
-	tmp1 = _mm256_shuffle_pd(v2, v3, 0x0);
-	tmp3 = _mm256_shuffle_pd(v2, v3, 0xF);
-	
-	v0 = _mm256_insertf128_pd(tmp0, _mm256_castpd256_pd128(tmp1), 1); // much faster than _mm256_permute2f128_pd on Ryzen/KNL, same on Intel mainstream
-	v1 = _mm256_insertf128_pd(tmp2, _mm256_castpd256_pd128(tmp3), 1); // much faster than _mm256_permute2f128_pdon Ryzen/KNL, same on Intel mainstream
-	v2 = _mm256_permute2f128_pd(tmp0, tmp1, 0x31);
+	v1 = _mm_shuffle_ps(v0, v2, BT_SHUFFLE(2, 3, 1, 3));                    // y0 y1 y2 0
+	v0 = _mm_shuffle_ps(v0, v2, BT_SHUFFLE(0, 1, 0, 3));                    // x0 x1 x2 0
+	v2 = btCastdTo128f(_mm_move_sd(btCastfTo128d(v2), btCastfTo128d(vT)));  // z0 z1 z2 0
 
 	return btMatrix3x3(v0, v1, v2);
-
 #elif defined(BT_USE_NEON)
 	// note: zeros the w channel. We can preserve it at the cost of two more vtrn instructions.
 	static const uint32x2_t zMask = (const uint32x2_t){static_cast<uint32_t>(-1), 0};
@@ -1246,26 +1125,6 @@ btMatrix3x3::transposeTimes(const btMatrix3x3& m) const
 	r2 = _mm_add_ps(r2, _mm_mul_ps(m2, _mm_shuffle_ps(row, row, 0xaa)));
 	return btMatrix3x3(r0, r1, r2);
 
-#elif defined BT_USE_SIMD_VECTOR3 && (defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX))
-	// zeros w
-//    static const __m128i xyzMask = (const __m128i){ -1ULL, 0xffffffffULL };
-	__m256d row = m_el[0].mVec128;
-	__m256d m0 = _mm256_and_pd(m.getRow(0).mVec128, btvFFF0fMask);
-	__m256d m1 = _mm256_and_pd(m.getRow(1).mVec128, btvFFF0fMask);
-	__m256d m2 = _mm256_and_pd(m.getRow(2).mVec128, btvFFF0fMask);
-	__m256d r0 = _mm256_mul_pd(m0, _mm256_permute4x64_pd(row, 0));
-	__m256d r1 = _mm256_mul_pd(m0, _mm256_permute4x64_pd(row, 0x55));
-	__m256d r2 = _mm256_mul_pd(m0, _mm256_permute4x64_pd(row, 0xaa));
-	row = m_el[1].mVec128;
-	r0 = _mm256_add_pd(r0, _mm256_mul_pd(m1, _mm256_permute4x64_pd(row, 0)));
-	r1 = _mm256_add_pd(r1, _mm256_mul_pd(m1, _mm256_permute4x64_pd(row, 0x55)));
-	r2 = _mm256_add_pd(r2, _mm256_mul_pd(m1, _mm256_permute4x64_pd(row, 0xaa)));
-	row = m_el[2].mVec128;
-	r0 = _mm256_add_pd(r0, _mm256_mul_pd(m2, _mm256_permute4x64_pd(row, 0)));
-	r1 = _mm256_add_pd(r1, _mm256_mul_pd(m2, _mm256_permute4x64_pd(row, 0x55)));
-	r2 = _mm256_add_pd(r2, _mm256_mul_pd(m2, _mm256_permute4x64_pd(row, 0xaa)));
-	return btMatrix3x3(r0, r1, r2);
-
 #elif defined BT_USE_NEON
 	// zeros w
 	static const uint32x4_t xyzMask = (const uint32x4_t){static_cast<uint32_t>(-1), static_cast<uint32_t>(-1), static_cast<uint32_t>(-1), 0};
@@ -1302,46 +1161,25 @@ btMatrix3x3::transposeTimes(const btMatrix3x3& m) const
 SIMD_FORCE_INLINE btMatrix3x3
 btMatrix3x3::timesTranspose(const btMatrix3x3& m) const
 {
-#if (defined (BT_USE_SSE_IN_API) && defined (BT_USE_SSE))
-    __m128 a0 = m_el[0].mVec128;
-    __m128 a1 = m_el[1].mVec128;
-    __m128 a2 = m_el[2].mVec128;
-    
-    btMatrix3x3 mT = m.transpose(); // we rely on transpose() zeroing w channel so that we don't have to do it here
-    __m128 mx = mT[0].mVec128;
-    __m128 my = mT[1].mVec128;
-    __m128 mz = mT[2].mVec128;
-    
-    __m128 r0 = _mm_mul_ps(mx, _mm_shuffle_ps(a0, a0, 0x00));
-    __m128 r1 = _mm_mul_ps(mx, _mm_shuffle_ps(a1, a1, 0x00));
-    __m128 r2 = _mm_mul_ps(mx, _mm_shuffle_ps(a2, a2, 0x00));
-    r0 = _mm_add_ps(r0, _mm_mul_ps(my, _mm_shuffle_ps(a0, a0, 0x55)));
-    r1 = _mm_add_ps(r1, _mm_mul_ps(my, _mm_shuffle_ps(a1, a1, 0x55)));
-    r2 = _mm_add_ps(r2, _mm_mul_ps(my, _mm_shuffle_ps(a2, a2, 0x55)));
-    r0 = _mm_add_ps(r0, _mm_mul_ps(mz, _mm_shuffle_ps(a0, a0, 0xaa)));
-    r1 = _mm_add_ps(r1, _mm_mul_ps(mz, _mm_shuffle_ps(a1, a1, 0xaa)));
-    r2 = _mm_add_ps(r2, _mm_mul_ps(mz, _mm_shuffle_ps(a2, a2, 0xaa)));
-    return btMatrix3x3( r0, r1, r2);
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE))
+	__m128 a0 = m_el[0].mVec128;
+	__m128 a1 = m_el[1].mVec128;
+	__m128 a2 = m_el[2].mVec128;
 
-#elif (defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX))
-	__m256d a0 = m_el[0].mVec128;
-	__m256d a1 = m_el[1].mVec128;
-	__m256d a2 = m_el[2].mVec128;
+	btMatrix3x3 mT = m.transpose();  // we rely on transpose() zeroing w channel so that we don't have to do it here
+	__m128 mx = mT[0].mVec128;
+	__m128 my = mT[1].mVec128;
+	__m128 mz = mT[2].mVec128;
 
-	btMatrix3x3 mT = m.transpose(); // we rely on transpose() zeroing w channel so that we don't have to do it here
-	__m256d mx = mT[0].mVec128;
-	__m256d my = mT[1].mVec128;
-	__m256d mz = mT[2].mVec128;
-
-	__m256d r0 = _mm256_mul_pd(mx, _mm256_permute4x64_pd(a0, 0x00));
-	__m256d r1 = _mm256_mul_pd(mx, _mm256_permute4x64_pd(a1, 0x00));
-	__m256d r2 = _mm256_mul_pd(mx, _mm256_permute4x64_pd(a2, 0x00));
-	r0 = _mm256_add_pd(r0, _mm256_mul_pd(my, _mm256_permute4x64_pd(a0, 0x55)));
-	r1 = _mm256_add_pd(r1, _mm256_mul_pd(my, _mm256_permute4x64_pd(a1, 0x55)));
-	r2 = _mm256_add_pd(r2, _mm256_mul_pd(my, _mm256_permute4x64_pd(a2, 0x55)));
-	r0 = _mm256_add_pd(r0, _mm256_mul_pd(mz, _mm256_permute4x64_pd(a0, 0xaa)));
-	r1 = _mm256_add_pd(r1, _mm256_mul_pd(mz, _mm256_permute4x64_pd(a1, 0xaa)));
-	r2 = _mm256_add_pd(r2, _mm256_mul_pd(mz, _mm256_permute4x64_pd(a2, 0xaa)));
+	__m128 r0 = _mm_mul_ps(mx, _mm_shuffle_ps(a0, a0, 0x00));
+	__m128 r1 = _mm_mul_ps(mx, _mm_shuffle_ps(a1, a1, 0x00));
+	__m128 r2 = _mm_mul_ps(mx, _mm_shuffle_ps(a2, a2, 0x00));
+	r0 = _mm_add_ps(r0, _mm_mul_ps(my, _mm_shuffle_ps(a0, a0, 0x55)));
+	r1 = _mm_add_ps(r1, _mm_mul_ps(my, _mm_shuffle_ps(a1, a1, 0x55)));
+	r2 = _mm_add_ps(r2, _mm_mul_ps(my, _mm_shuffle_ps(a2, a2, 0x55)));
+	r0 = _mm_add_ps(r0, _mm_mul_ps(mz, _mm_shuffle_ps(a0, a0, 0xaa)));
+	r1 = _mm_add_ps(r1, _mm_mul_ps(mz, _mm_shuffle_ps(a1, a1, 0xaa)));
+	r2 = _mm_add_ps(r2, _mm_mul_ps(mz, _mm_shuffle_ps(a2, a2, 0xaa)));
 	return btMatrix3x3(r0, r1, r2);
 
 #elif defined BT_USE_NEON
@@ -1376,8 +1214,8 @@ btMatrix3x3::timesTranspose(const btMatrix3x3& m) const
 SIMD_FORCE_INLINE btVector3
 operator*(const btMatrix3x3& m, const btVector3& v)
 {
-#if (defined (BT_USE_SSE_IN_API) && (defined (BT_USE_SSE) || defined (BT_USE_AVX)))|| defined (BT_USE_NEON)
-    return v.dot3(m[0], m[1], m[2]);
+#if (defined(BT_USE_SSE_IN_API) && defined(BT_USE_SSE)) || defined(BT_USE_NEON)
+	return v.dot3(m[0], m[1], m[2]);
 #else
 	return btVector3(m[0].dot(v), m[1].dot(v), m[2].dot(v));
 #endif
@@ -1400,22 +1238,6 @@ operator*(const btVector3& v, const btMatrix3x3& m)
 	c2 = _mm_mul_ps(c2, _mm_and_ps(m[2].mVec128, btvFFF0fMask));
 
 	return btVector3(_mm_add_ps(c0, c2));
-
-#elif defined BT_USE_SIMD_VECTOR3 && (defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX))
-	
-	const __m256d vv = v.mVec128;
-
-	__m256d c0 = bt_splat_pd(vv, 0);
-	__m256d c1 = bt_splat_pd(vv, 1);
-	__m256d c2 = bt_splat_pd(vv, 2);
-
-	c0 = _mm256_mul_pd(c0, _mm256_and_pd(m[0].mVec128, btvFFF0fMask));
-	c1 = _mm256_mul_pd(c1, _mm256_and_pd(m[1].mVec128, btvFFF0fMask));
-	c0 = _mm256_add_pd(c0, c1);
-	c2 = _mm256_mul_pd(c2, _mm256_and_pd(m[2].mVec128, btvFFF0fMask));
-
-	return btVector3(_mm256_add_pd(c0, c2));
-
 #elif defined(BT_USE_NEON)
 	const float32x4_t vv = v.mVec128;
 	const float32x2_t vlo = vget_low_f32(vv);
@@ -1448,49 +1270,43 @@ operator*(const btMatrix3x3& m1, const btMatrix3x3& m2)
 	__m128 m11 = m1[1].mVec128;
 	__m128 m12 = m1[2].mVec128;
 
-#elif defined BT_USE_SIMD_VECTOR3 && (defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX))
+	__m128 m2v = _mm_and_ps(m2[0].mVec128, btvFFF0fMask);
 
-	__m256d m10 = m1[0].mVec128;
-	__m256d m11 = m1[1].mVec128;
-	__m256d m12 = m1[2].mVec128;
+	__m128 c0 = bt_splat_ps(m10, 0);
+	__m128 c1 = bt_splat_ps(m11, 0);
+	__m128 c2 = bt_splat_ps(m12, 0);
 
-	__m256d m2v = _mm256_and_pd(m2[0].mVec128, btvFFF0fMask);
+	c0 = _mm_mul_ps(c0, m2v);
+	c1 = _mm_mul_ps(c1, m2v);
+	c2 = _mm_mul_ps(c2, m2v);
 
-	__m256d c0 = bt_splat_pd(m10, 0);
-	__m256d c1 = bt_splat_pd(m11, 0);
-	__m256d c2 = bt_splat_pd(m12, 0);
+	m2v = _mm_and_ps(m2[1].mVec128, btvFFF0fMask);
 
-	c0 = _mm256_mul_pd(c0, m2v);
-	c1 = _mm256_mul_pd(c1, m2v);
-	c2 = _mm256_mul_pd(c2, m2v);
+	__m128 c0_1 = bt_splat_ps(m10, 1);
+	__m128 c1_1 = bt_splat_ps(m11, 1);
+	__m128 c2_1 = bt_splat_ps(m12, 1);
 
-	m2v = _mm256_and_pd(m2[1].mVec128, btvFFF0fMask);
+	c0_1 = _mm_mul_ps(c0_1, m2v);
+	c1_1 = _mm_mul_ps(c1_1, m2v);
+	c2_1 = _mm_mul_ps(c2_1, m2v);
 
-	__m256d c0_1 = bt_splat_pd(m10, 1);
-	__m256d c1_1 = bt_splat_pd(m11, 1);
-	__m256d c2_1 = bt_splat_pd(m12, 1);
+	m2v = _mm_and_ps(m2[2].mVec128, btvFFF0fMask);
 
-	c0_1 = _mm256_mul_pd(c0_1, m2v);
-	c1_1 = _mm256_mul_pd(c1_1, m2v);
-	c2_1 = _mm256_mul_pd(c2_1, m2v);
+	c0 = _mm_add_ps(c0, c0_1);
+	c1 = _mm_add_ps(c1, c1_1);
+	c2 = _mm_add_ps(c2, c2_1);
 
-	m2v = _mm256_and_pd(m2[2].mVec128, btvFFF0fMask);
+	m10 = bt_splat_ps(m10, 2);
+	m11 = bt_splat_ps(m11, 2);
+	m12 = bt_splat_ps(m12, 2);
 
-	c0 = _mm256_add_pd(c0, c0_1);
-	c1 = _mm256_add_pd(c1, c1_1);
-	c2 = _mm256_add_pd(c2, c2_1);
+	m10 = _mm_mul_ps(m10, m2v);
+	m11 = _mm_mul_ps(m11, m2v);
+	m12 = _mm_mul_ps(m12, m2v);
 
-	m10 = bt_splat_pd(m10, 2);
-	m11 = bt_splat_pd(m11, 2);
-	m12 = bt_splat_pd(m12, 2);
-
-	m10 = _mm256_mul_pd(m10, m2v);
-	m11 = _mm256_mul_pd(m11, m2v);
-	m12 = _mm256_mul_pd(m12, m2v);
-
-	c0 = _mm256_add_pd(c0, m10);
-	c1 = _mm256_add_pd(c1, m11);
-	c2 = _mm256_add_pd(c2, m12);
+	c0 = _mm_add_ps(c0, m10);
+	c1 = _mm_add_ps(c1, m11);
+	c2 = _mm_add_ps(c2, m12);
 
 	return btMatrix3x3(c0, c1, c2);
 
@@ -1562,25 +1378,11 @@ SIMD_FORCE_INLINE bool operator==(const btMatrix3x3& m1, const btMatrix3x3& m2)
 
 	int m = _mm_movemask_ps((__m128)c0);
 	return (0x7 == (m & 0x7));
-	
-#elif (defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX))
 
-	__m256d c0, c1, c2;
-
-	c0 = _mm256_cmp_pd(m1[0].mVec128, m2[0].mVec128, _CMP_EQ_OQ);
-	c1 = _mm256_cmp_pd(m1[1].mVec128, m2[1].mVec128, _CMP_EQ_OQ);
-	c2 = _mm256_cmp_pd(m1[2].mVec128, m2[2].mVec128, _CMP_EQ_OQ);
-
-	c0 = _mm256_and_pd(c0, c1);
-	c0 = _mm256_and_pd(c0, c2);
-
-	return (0x7 == _mm256_movemask_pd((__m256d)c0));
-
-#else 
-	return 
-    (   m1[0][0] == m2[0][0] && m1[1][0] == m2[1][0] && m1[2][0] == m2[2][0] &&
-		m1[0][1] == m2[0][1] && m1[1][1] == m2[1][1] && m1[2][1] == m2[2][1] &&
-		m1[0][2] == m2[0][2] && m1[1][2] == m2[1][2] && m1[2][2] == m2[2][2] );
+#else
+	return (m1[0][0] == m2[0][0] && m1[1][0] == m2[1][0] && m1[2][0] == m2[2][0] &&
+			m1[0][1] == m2[0][1] && m1[1][1] == m2[1][1] && m1[2][1] == m2[2][1] &&
+			m1[0][2] == m2[0][2] && m1[1][2] == m2[1][2] && m1[2][2] == m2[2][2]);
 #endif
 }
 
