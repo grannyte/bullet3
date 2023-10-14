@@ -672,6 +672,7 @@ public:
 		// capping the thread count for PPL due to a thread-index issue
 		const int maxThreadCount = (std::min)(int(BT_MAX_THREAD_COUNT), 31);
 		m_numThreads = (std::max)(1, (std::min)(maxThreadCount, numThreads));
+		/*
 		using namespace concurrency;
 		if (CurrentScheduler::Id() != -1)
 		{
@@ -686,7 +687,7 @@ public:
 			CurrentScheduler::Detach();
 		}
 		policy.SetConcurrencyLimits(m_numThreads, m_numThreads);
-		CurrentScheduler::Create(policy);
+		CurrentScheduler::Create(policy);*/
 		m_savedThreadCounter = 0;
 		if (m_isActive)
 		{

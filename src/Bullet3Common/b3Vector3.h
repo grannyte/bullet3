@@ -123,7 +123,7 @@ public:
 #if defined (B3_USE_SSE) || defined (B3_USE_AVX) || defined(B3_USE_NEON) // _WIN32 || ARM
         union {
             b3SimdFloat4      mVec128;
-            float	m_floats[4];
+            b3Scalar	m_floats[4];
 			struct {float x,y,z,w;};
 
         };

@@ -28,8 +28,8 @@ subject to the following restrictions:
 btCollisionDispatcherMt::btCollisionDispatcherMt(btCollisionConfiguration* config, int grainSize)
 	: btCollisionDispatcher(config)
 {
-	m_batchManifoldsPtr.resize(btGetTaskScheduler()->getNumThreads());
-	m_batchReleasePtr.resize(btGetTaskScheduler()->getNumThreads());
+	m_batchManifoldsPtr.resize(btGetTaskScheduler()->getNumThreads()*4);
+	m_batchReleasePtr.resize(btGetTaskScheduler()->getNumThreads()*4);
 
 	m_batchUpdating = false;
 	m_grainSize = grainSize;  // iterations per task

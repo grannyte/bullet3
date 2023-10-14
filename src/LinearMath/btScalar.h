@@ -141,6 +141,7 @@ inline int btIsDoublePrecision()
 				#define BT_USE_SIMD_VECTOR3
 			#endif
 
+			#define BT_USE_SSE_IN_API
 			#define BT_USE_AVX
 			#ifdef BT_USE_AVX
 

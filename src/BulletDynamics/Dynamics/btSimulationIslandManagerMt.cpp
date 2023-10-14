@@ -436,6 +436,7 @@ void btSimulationIslandManagerMt::addManifoldsToIslands(btDispatcher* dispatcher
 				// scatter manifolds into various islands
 				int islandId = getIslandId(manifold);
 				// if island not sleeping,
+				if (islandId != -1)
 				if (Island* island = getIsland(islandId))
 				{
 					island->manifoldArray.push_back(manifold);
