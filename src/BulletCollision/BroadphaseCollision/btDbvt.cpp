@@ -72,7 +72,7 @@ static void getmaxdepth(const btDbvtNode* node, int depth, int& maxdepth)
 static DBVT_INLINE void deletenode(btDbvt* pdbvt,
 								   btDbvtNode* node)
 {
-	btAlignedFree(pdbvt->m_free);
+	delete pdbvt->m_free;
 	pdbvt->m_free = node;
 }
 
@@ -103,13 +103,15 @@ static DBVT_INLINE btDbvtNode* createnode(btDbvt* pdbvt,
 	}
 	else
 	{
-		node = new (btAlignedAlloc(sizeof(btDbvtNode), 16)) btDbvtNode();
+		node = new btDbvtNode();
 	}
 	node->parent = parent;
 	node->data = data;
 	node->childs[1] = 0;
 	return (node);
 }
+btAlignedplalloc<btDbvtNode> btDbvtNode::btDbvtNodePool;
+btAlignedplalloc<btDbvntNode> btDbvntNode::btDbvtNodePool;
 
 //
 static DBVT_INLINE btDbvtNode* createnode(btDbvt* pdbvt,
@@ -799,7 +801,7 @@ struct btDbvtBenchmark
 		{
 			Node n;
 			n.leaf = leaf;
-			n.depth = dot(leaf->volume.Center(), m_axis);
+			n.depth = dot(btQuaternion( leaf->volume.Center(), m_axis);
 		}
 		static int sortfnc(const Node& a, const Node& b)
 		{

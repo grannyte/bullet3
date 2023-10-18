@@ -354,11 +354,13 @@ void btDbvtBroadphase::setAabb(btBroadphaseProxy* absproxy,
 				docollide = true;
 			}
 		}
+		btMutexLock(&m_mutex);
 		listremove(proxy, m_stageRoots[proxy->stage]);
 		proxy->m_aabbMin = aabbMin;
 		proxy->m_aabbMax = aabbMax;
 		proxy->stage = m_stageCurrent;
 		listappend(proxy, m_stageRoots[m_stageCurrent]);
+		btMutexUnlock(&m_mutex);
 		if (docollide)
 		{
 			m_needcleanup = true;

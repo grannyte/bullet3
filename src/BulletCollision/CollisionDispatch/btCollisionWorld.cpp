@@ -68,7 +68,7 @@ btCollisionWorld::btCollisionWorld(btDispatcher* dispatcher, btBroadphaseInterfa
 	: m_dispatcher1(dispatcher),
 	  m_broadphasePairCache(pairCache),
 	  m_debugDrawer(0),
-	  m_forceUpdateAllAabbs(true)
+	  m_forceUpdateAllAabbs(false)
 {
 }
 

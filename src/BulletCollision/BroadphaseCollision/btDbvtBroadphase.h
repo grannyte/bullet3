@@ -61,6 +61,7 @@ typedef btAlignedObjectArray<btDbvtProxy*> btDbvtProxyArray;
 ///This is a very fast broadphase, especially for very dynamic worlds where many objects are moving. Its insert/add and remove of objects is generally faster than the sweep and prune broadphases btAxisSweep3 and bt32BitAxisSweep3.
 struct btDbvtBroadphase : btBroadphaseInterface
 {
+	btSpinMutex m_mutex;
 	/* Config		*/
 	enum
 	{

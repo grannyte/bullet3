@@ -21,6 +21,7 @@ subject to the following restrictions:
 #include "LinearMath/btVector3.h"
 #include "LinearMath/btTransform.h"
 #include "LinearMath/btAabbUtil2.h"
+#include <ppl.h>
 //
 // Compile time configuration
 //
@@ -108,14 +109,17 @@ subject to the following restrictions:
 #endif
 #include <string.h>
 #endif
+#include <concurrent_vector.h>
 
 #ifndef DBVT_USE_TEMPLATE
 #error "DBVT_USE_TEMPLATE undefined"
 #endif
+#include <concurrent_priority_queue.h>
 
 #ifndef DBVT_USE_MEMMOVE
 #error "DBVT_USE_MEMMOVE undefined"
 #endif
+#include <LinearMath/btThreads.h>
 
 #ifndef DBVT_ENABLE_BENCHMARK
 #error "DBVT_ENABLE_BENCHMARK undefined"
@@ -186,9 +190,166 @@ private:
 // Types
 typedef btDbvtAabbMm btDbvtVolume;
 
+template <typename T>
+struct btAlignedplalloc
+{
+	typedef T value_type;
+
+	btAlignedplalloc() {}
+
+	template <typename U>
+	btAlignedplalloc(const btAlignedplalloc<U>&)
+	{
+	}
+
+	btAlignedplalloc(const btAlignedplalloc&) {}
+
+	btAlignedplalloc& operator=(const btAlignedplalloc&) { return *this; }
+
+	btAlignedplalloc(btAlignedplalloc&&) = default;
+
+	btAlignedplalloc& operator=(btAlignedplalloc&&) = default;
+
+	typedef std::true_type propagate_on_container_copy_assignment;
+	typedef std::true_type propagate_on_container_move_assignment;
+	typedef std::true_type propagate_on_container_swap;
+
+	bool operator==(const btAlignedplalloc& other) const
+	{
+		return this == &other;
+	}
+
+	bool operator!=(const btAlignedplalloc& other) const
+	{
+		return !(*this == other);
+	}
+
+	T* allocate(size_t num_to_allocate)
+	{
+		if (num_to_allocate != 1)
+		{
+			// Perform aligned allocation for multiple objects
+			size_t size = sizeof(T) * num_to_allocate;
+			void* pMemory = _aligned_malloc(size, alignof(T));
+			if (pMemory == nullptr)
+			{
+				throw std::bad_alloc();
+			}
+			return static_cast<T*>(pMemory);
+		}
+		else if (available.empty())
+		{
+			return ExtendPool();
+		}
+		else
+		{
+			T* result;
+			while (!available.try_pop(result))
+				if (available.empty())
+					return ExtendPool();
+			if (result == nullptr)
+				__debugbreak();
+			return result;
+		}
+	}
+
+	T* ExtendPool()
+	{
+		// First allocate 8, then double whenever we run out of memory
+		size_t const to_allocate = 8 << memory.size();
+		size_t alignment = alignof(T);
+		size_t object_size = sizeof(T) + alignment-1;
+
+		// Calculate the total size needed, including alignment padding
+		size_t total_size = object_size * to_allocate + alignment - 1;
+
+		// Allocate memory with proper alignment
+		auto allocated = std::make_unique<value_holder[]>(to_allocate);
+		value_holder* first_new = allocated.get();
+		memory.push_back(std::move(allocated));
+
+		// Store aligned pointers in the available queue
+		for (size_t i = 0; i < to_allocate; ++i)
+		{
+			if (nullptr ==&first_new[i])
+				__debugbreak();
+			else if (btAlignPointer((T*)&first_new[i], alignment) == nullptr)
+				__debugbreak();
+			//printf("Allocating %p\n", btAlignPointer((T*)&first_new[i], alignment));
+			available.push(btAlignPointer((T*)&first_new[i], alignment));
+		}
+
+		T* result; 
+		while (!available.try_pop(result))
+			if (available.empty())
+				return ExtendPool();
+
+		return (result);
+	}
+
+	void deallocate(T* ptr, size_t num_to_free)
+	{
+		if (ptr == nullptr)
+		{
+		}
+		else if (num_to_free == 1)
+		{
+			available.push(ptr);
+		}
+		else
+		{
+			// Deallocate memory using _aligned_free for aligned allocation
+			_aligned_free(ptr);
+		}
+	}
+
+	// Boilerplate that shouldn't be needed, except libstdc++ doesn't use allocator_traits yet
+	template <typename U>
+	struct rebind
+	{
+		typedef btAlignedplalloc<U> other;
+	};
+
+	typedef T* pointer;
+	typedef const T* const_pointer;
+	typedef T& reference;
+	typedef const T& const_reference;
+
+	template <typename U, typename... Args>
+	void construct(U* object, Args&&... args)
+	{
+		new (object) U(std::forward<Args>(args)...);
+	}
+
+	template <typename U, typename... Args>
+	void construct(const U* object, Args&&... args) = delete;
+
+	template <typename U>
+	void destroy(U* object)
+	{
+		object->~U();
+	}
+
+private:
+	union value_holder
+	{
+		value_holder() {}
+		~value_holder() {}
+		struct
+		{
+			T value;
+			char buffera[alignof(T) - 1];
+		};
+		char buffer[sizeof(T) + alignof(T) - 1];
+	};
+
+	Concurrency::concurrent_vector<std::unique_ptr<value_holder[]>> memory;
+	Concurrency::concurrent_priority_queue<T*> available;
+};
 /* btDbvtNode				*/
 struct btDbvtNode
 {
+	btSpinMutex m_mutex;
 	btDbvtVolume volume;
 	btDbvtNode* parent;
 	DBVT_INLINE bool isleaf() const { return (childs[1] == 0); }
@@ -198,6 +359,20 @@ struct btDbvtNode
 		void* data;
 		int dataAsInt;
 	};
+
+	static btAlignedplalloc<btDbvtNode> btDbvtNodePool;
+	void* operator new(size_t size)
+	{
+		//use pool allocationa
+		auto mem = btDbvtNodePool.allocate(1);
+		return mem;
+	}
+
+	void operator delete(void* memory)
+	{
+		btDbvtNodePool.deallocate((btDbvtNode*)memory, 1);
+	}
+
 };
 
 /* btDbv(normal)tNode                */
@@ -228,6 +403,21 @@ struct btDbvntNode
         if (childs[1])
             delete childs[1];
     }
+
+	
+
+	static btAlignedplalloc<btDbvntNode> btDbvtNodePool;
+	void* operator new(size_t size)
+	{
+		//use pool allocationa
+		auto mem = btDbvtNodePool.allocate(1);
+		return mem;
+	}
+
+	void operator delete(void* memory)
+	{
+		btDbvtNodePool.deallocate((btDbvntNode*)memory, 1);
+	}
 };
 
 typedef btAlignedObjectArray<const btDbvtNode*> btNodeStack;
@@ -237,6 +427,7 @@ typedef btAlignedObjectArray<const btDbvtNode*> btNodeStack;
 ///Unlike the btQuantizedBvh, nodes can be dynamically moved around, which allows for change in topology of the underlying data structure.
 struct btDbvt
 {
+	btSpinMutex m_mutex;
 	/* Stack element	*/
 	struct sStkNN
 	{
@@ -634,21 +825,14 @@ DBVT_INLINE bool Intersect(const btDbvtAabbMm& a,
 #if	DBVT_INT0_IMPL == DBVT_IMPL_SSE
 	const __m128	rt(_mm_or_ps(_mm_cmplt_ps(_mm_load_ps(b.mx), _mm_load_ps(a.mi)),
 		_mm_cmplt_ps(_mm_load_ps(a.mx), _mm_load_ps(b.mi))));
-#if defined (_WIN32)
-	const __int32* pu((const __int32*)& rt);
-#else
-	const int* pu((const int*)& rt);
-#endif
-	return((pu[0] | pu[1] | pu[2]) == 0);
+
+	int mask = _mm_movemask_ps(rt);
+	return (mask & 7) == 0;  //are first 3 slots all 0?
 #elif	DBVT_INT0_IMPL == DBVT_IMPL_AVX
 	const __m256d	rt(_mm256_or_pd(_mm256_cmp_pd(_mm256_load_pd(b.mx), _mm256_load_pd(a.mi), _CMP_LT_OS),
 		_mm256_cmp_pd(_mm256_load_pd(a.mx), _mm256_load_pd(b.mi), _CMP_LT_OS)));
-#if defined (_WIN32)
-	const __int64* pu((const __int64*)& rt);
-#else
-	const long long int* pu((const long long int*)& rt);
-#endif
-	return((pu[0] | pu[1] | pu[2]) == 0);
+	__int64  mask = _mm256_movemask_pd(rt);
+return (mask & 7) == 0;  //are first 3 slots all 0?
 #else
 	return(	(a.mi.x()<=b.mx.x())&&
 		(a.mx.x()>=b.mi.x())&&
