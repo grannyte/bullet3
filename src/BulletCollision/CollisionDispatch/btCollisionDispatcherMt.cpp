@@ -174,6 +174,10 @@ void btCollisionDispatcherMt::dispatchAllCollisionPairs(btOverlappingPairCache* 
 	// update the indices (used when releasing manifolds)
 	for (int i = 0; i < m_manifoldsPtr.size(); ++i)
 	{
+		while (!m_manifoldsPtr[i])
+		{
+			m_manifoldsPtr.removeAtIndex(i);
+		}
 		m_manifoldsPtr[i]->m_index1a = i;
 	}
 }
