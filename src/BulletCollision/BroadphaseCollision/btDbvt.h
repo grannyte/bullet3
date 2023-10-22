@@ -349,7 +349,6 @@ private:
 /* btDbvtNode				*/
 struct btDbvtNode
 {
-	btSpinMutex m_mutex;
 	btDbvtVolume volume;
 	btDbvtNode* parent;
 	DBVT_INLINE bool isleaf() const { return (childs[1] == 0); }
