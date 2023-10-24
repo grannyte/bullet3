@@ -36,7 +36,7 @@ typedef float float4 __attribute__((vector_size(16)));
 //typedef  uint32_t uint4 __attribute__ ((vector_size(16)));
 
 /* TODO_AVX */
-#if defined BT_USE_SSE || (defined (_WIN32) && !defined(BT_USE_AVX))
+#if defined BT_USE_SSE || (defined (_WIN32) && !(defined(BT_USE_AVX) ||defined(BT_DOUBLE_PRECISION)))
 
 #define LOG2_ARRAY_SIZE 6
 #define STACK_ARRAY_COUNT (1UL << LOG2_ARRAY_SIZE)

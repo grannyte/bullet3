@@ -958,8 +958,13 @@ void btDiscreteDynamicsWorld::integrateTransformsInternal(btRigidBody** bodies, 
 
 		if (body->isActive() && (!body->isStaticOrKinematicObject()))
 		{
+			if (isnan(predictedTrans.getOrigin().x()) || isnan(predictedTrans.getOrigin().y()) || isnan(predictedTrans.getOrigin().z())||
+				isnan(body->getLinearVelocity().length2()) || isnan(body->getAngularVelocity().length2())
+				)
+				__debugbreak();
 			body->predictIntegratedTransform(timeStep, predictedTrans);
-
+			if (isnan(predictedTrans.getOrigin().x()) || isnan(predictedTrans.getOrigin().y()) || isnan(predictedTrans.getOrigin().z()))
+				__debugbreak();
 			btScalar squareMotion = (predictedTrans.getOrigin() - body->getWorldTransform().getOrigin()).length2();
 
 			if (getDispatchInfo().m_useContinuous && body->getCcdSquareMotionThreshold() && body->getCcdSquareMotionThreshold() < squareMotion)
@@ -989,6 +994,8 @@ void btDiscreteDynamicsWorld::integrateTransformsInternal(btRigidBody** bodies, 
 #else
 					btClosestNotMeConvexResultCallback sweepResults(body, body->getWorldTransform().getOrigin(), predictedTrans.getOrigin(), getBroadphase()->getOverlappingPairCache(), getDispatcher());
 #endif
+					if (isnan(predictedTrans.getOrigin().x()) || isnan(predictedTrans.getOrigin().y()) || isnan(predictedTrans.getOrigin().z()))
+						__debugbreak();
 					//btConvexShape* convexShape = static_cast<btConvexShape*>(body->getCollisionShape());
 					btSphereShape tmpSphere(body->getCcdSweptSphereRadius());  //btConvexShape* convexShape = static_cast<btConvexShape*>(body->getCollisionShape());
 					sweepResults.m_allowedPenetration = getDispatchInfo().m_allowedCcdPenetration;
@@ -1006,6 +1013,8 @@ void btDiscreteDynamicsWorld::integrateTransformsInternal(btRigidBody** bodies, 
 						body->predictIntegratedTransform(timeStep * body->getHitFraction(), predictedTrans);
 						body->setHitFraction(0.f);
 						body->proceedToTransform(predictedTrans);
+						if (isnan(predictedTrans.getOrigin().x()) || isnan(predictedTrans.getOrigin().y()) || isnan(predictedTrans.getOrigin().z()))
+							__debugbreak();
 
 #if 0
 						btVector3 linVel = body->getLinearVelocity();
