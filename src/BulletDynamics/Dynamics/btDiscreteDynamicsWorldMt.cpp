@@ -194,7 +194,7 @@ struct UpdaterUnconstrainedMotion : public btIParallelForBody
 	btScalar timeStep;
 	btRigidBody** rigidBodies;
 
-	void forLoop(int iBegin, int iEnd) const BT_OVERRIDE
+	void forLoop(const int iBegin, const int iEnd) const BT_OVERRIDE
 	{
 		for (int i = iBegin; i < iEnd; ++i)
 		{

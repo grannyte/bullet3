@@ -409,7 +409,7 @@ btITaskScheduler* btGetTaskScheduler()
 	return gBtTaskScheduler;
 }
 
-void btParallelFor(int iBegin, int iEnd, int grainSize, const btIParallelForBody& body)
+void btParallelFor(const int iBegin,const int iEnd,const int grainSize, const btIParallelForBody& body)
 {
 #if BT_THREADSAFE
 

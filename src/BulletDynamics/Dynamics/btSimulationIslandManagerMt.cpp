@@ -171,8 +171,13 @@ void btSimulationIslandManagerMt::initIslandPools()
 
 btSimulationIslandManagerMt::Island* btSimulationIslandManagerMt::getIsland(int id)
 {
-	btAssert(id >= 0);
-	btAssert(id < m_lookupIslandFromId.size());
+	//btAssert(id >= 0);
+	//btAssert(id < m_lookupIslandFromId.size());
+	if (id >= m_lookupIslandFromId.size())
+	{
+		printf("getIsland(%d) m_lookupIslandFromId.size()=%d , m_lookupIslandFromId.data=%p\n", id, m_lookupIslandFromId.size(), &m_lookupIslandFromId[0]);
+		return nullptr;
+	}
 	Island* island = m_lookupIslandFromId[id];
 	if (island == NULL)
 	{
@@ -563,7 +568,7 @@ struct UpdateIslandDispatcher : public btIParallelForBody
 	{
 	}
 
-	void forLoop(int iBegin, int iEnd) const BT_OVERRIDE
+	void forLoop(const int iBegin, const int iEnd) const BT_OVERRIDE
 	{
 		btConstraintSolver* solver = m_solverParams.m_solverPool;
 		for (int i = iBegin; i < iEnd; ++i)

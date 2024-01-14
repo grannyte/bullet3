@@ -65,8 +65,10 @@ btPersistentManifold* btCollisionDispatcherMt::getNewManifold(const btCollisionO
 		// batch updater will update manifold pointers array after finishing, so
 		// only need to update array when not batch-updating
 		//btAssert( !btThreadsAreRunning() );
+		btMutexLock(&m_manifoldsPtrMutex);
 		manifold->m_index1a = m_manifoldsPtr.size();
 		m_manifoldsPtr.push_back(manifold);
+		btMutexUnlock(&m_manifoldsPtrMutex);
 	}
 	else
 	{
@@ -82,14 +84,17 @@ void btCollisionDispatcherMt::releaseManifold(btPersistentManifold* manifold)
 	
 	if (!m_batchUpdating)
 	{
+
 		clearManifold(manifold);
 		// batch updater will update manifold pointers array after finishing, so
 		// only need to update array when not batch-updating
+		btMutexLock(&m_manifoldsPtrMutex);
 		int findIndex = manifold->m_index1a;
 		btAssert(findIndex < m_manifoldsPtr.size());
 		m_manifoldsPtr.swap(findIndex, m_manifoldsPtr.size() - 1);
 		m_manifoldsPtr[findIndex]->m_index1a = findIndex;
 		m_manifoldsPtr.pop_back();
+		btMutexUnlock(&m_manifoldsPtrMutex);
 	} else {
 		m_batchReleasePtr[btGetCurrentThreadIndex()].push_back(manifold);
 		return;
@@ -120,7 +125,7 @@ struct CollisionDispatcherUpdater : public btIParallelForBody
 		mDispatcher = NULL;
 		mInfo = NULL;
 	}
-	void forLoop(int iBegin, int iEnd) const
+	void forLoop(const int iBegin, const int iEnd) const
 	{
 		for (int i = iBegin; i < iEnd; ++i)
 		{

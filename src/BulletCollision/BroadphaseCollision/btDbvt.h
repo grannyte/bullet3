@@ -256,7 +256,7 @@ struct btAlignedplalloc
 	T* ExtendPool()
 	{
 		// First allocate 8, then double whenever we run out of memory
-		size_t const to_allocate = 8 << memory.size();
+		size_t const to_allocate = 8ll << memory.size();
 		size_t alignment = alignof(T);
 		size_t object_size = sizeof(T) + alignment-1;
 

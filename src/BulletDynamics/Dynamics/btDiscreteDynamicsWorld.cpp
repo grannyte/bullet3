@@ -800,7 +800,8 @@ public:
 		///don't do CCD when the collision filters are not matching
 		if (!ClosestConvexResultCallback::needsCollision(proxy0))
 			return false;
-		if (m_pairCache->getOverlapFilterCallback()) {
+		if (m_pairCache->getOverlapFilterCallback())
+		{
 			btBroadphaseProxy* proxy1 = m_me->getBroadphaseHandle();
 			bool collides = m_pairCache->needsBroadphaseCollision(proxy0, proxy1);
 			if (!collides)
@@ -958,10 +959,21 @@ void btDiscreteDynamicsWorld::integrateTransformsInternal(btRigidBody** bodies, 
 
 		if (body->isActive() && (!body->isStaticOrKinematicObject()))
 		{
-			if (isnan(predictedTrans.getOrigin().x()) || isnan(predictedTrans.getOrigin().y()) || isnan(predictedTrans.getOrigin().z())||
-				isnan(body->getLinearVelocity().length2()) || isnan(body->getAngularVelocity().length2())
-				)
-				__debugbreak();
+			if (isnan(predictedTrans.getOrigin().length2()))
+			{
+				predictedTrans.setOrigin(body->getWorldTransform().getOrigin());
+				if (isnan(predictedTrans.getOrigin().length2()))
+					predictedTrans.setOrigin(btVector3(0, 0, 0));
+			}
+
+			if (isnan(body->getLinearVelocity().length2()))
+			{
+				body->setLinearVelocity(btVector3(0, 0, 0));
+			}
+			if (isnan(body->getAngularVelocity().length2()))
+			{
+				body->setAngularVelocity(btVector3(0, 0, 0));
+			}
 			body->predictIntegratedTransform(timeStep, predictedTrans);
 			if (isnan(predictedTrans.getOrigin().x()) || isnan(predictedTrans.getOrigin().y()) || isnan(predictedTrans.getOrigin().z()))
 				__debugbreak();
@@ -1035,11 +1047,11 @@ void btDiscreteDynamicsWorld::integrateTransformsInternal(btRigidBody** bodies, 
 						}
 #else
 
-						//don't apply the collision response right now, it will happen next frame
-						//if you really need to, you can uncomment next 3 lines. Note that is uses zero restitution.
-						//btScalar appliedImpulse = 0.f;
-						//btScalar depth = 0.f;
-						//appliedImpulse = resolveSingleCollision(body,(btCollisionObject*)sweepResults.m_hitCollisionObject,sweepResults.m_hitPointWorld,sweepResults.m_hitNormalWorld,getSolverInfo(), depth);
+							//don't apply the collision response right now, it will happen next frame
+							//if you really need to, you can uncomment next 3 lines. Note that is uses zero restitution.
+							//btScalar appliedImpulse = 0.f;
+							//btScalar depth = 0.f;
+							//appliedImpulse = resolveSingleCollision(body,(btCollisionObject*)sweepResults.m_hitCollisionObject,sweepResults.m_hitPointWorld,sweepResults.m_hitNormalWorld,getSolverInfo(), depth);
 
 #endif
 
@@ -1453,7 +1465,6 @@ void btDiscreteDynamicsWorld::serializeDynamicsWorldInfo(btSerializer* serialize
 
 	worldInfo->m_solverInfo.m_splitImpulse = getSolverInfo().m_splitImpulse;
 
-	
 #ifdef BT_USE_DOUBLE_PRECISION
 	const char* structType = "btDynamicsWorldDoubleData";
 #else   //BT_USE_DOUBLE_PRECISION

@@ -99,11 +99,14 @@ void btRigidBody::setupRigidBody(const btRigidBody::btRigidBodyConstructionInfo&
 
 void btRigidBody::predictIntegratedTransform(btScalar timeStep, btTransform& predictedTransform)
 {
-	if (isnan(m_worldTransform.getOrigin().x()) || isnan(m_worldTransform.getOrigin().y()) || isnan(m_worldTransform.getOrigin().z()) 
-		|| isnan(m_worldTransform.getRotation().x()) || isnan(m_worldTransform.getRotation().y()) || isnan(m_worldTransform.getRotation().z()) || isnan(m_worldTransform.getRotation().w())
-		|| isnan(m_linearVelocity.x()) || isnan(m_linearVelocity.y()) || isnan(m_linearVelocity.z())
-		|| isnan(m_angularVelocity.x()) || isnan(m_angularVelocity.y()) || isnan(m_angularVelocity.z()))		
+	if (isnan(m_worldTransform.getOrigin().length2()) || 
+		isnan(m_worldTransform.getRotation().x()) || isnan(m_worldTransform.getRotation().y()) || isnan(m_worldTransform.getRotation().z()) || isnan(m_worldTransform.getRotation().w()) || 
+		isnan(m_linearVelocity.length2()) || 
+		isnan(m_angularVelocity.length2()))
+	{
+		printf("origin length2 %f rotatation %f %f %f %f linear %f angular %f\n", m_worldTransform.getOrigin().length2(), m_worldTransform.getRotation().x(), m_worldTransform.getRotation().y(), m_worldTransform.getRotation().z(), m_worldTransform.getRotation().w(), m_linearVelocity.length2(), m_angularVelocity.length2());
 		__debugbreak();
+	}
 	btTransformUtil::integrateTransform(m_worldTransform, m_linearVelocity, m_angularVelocity, timeStep, predictedTransform);
 }
 

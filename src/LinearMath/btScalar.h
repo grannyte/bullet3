@@ -141,8 +141,8 @@ inline int btIsDoublePrecision()
 			//	#define BT_USE_SIMD_VECTOR3
 			#endif
 
-			//#define BT_USE_SSE_IN_API
-			//#define BT_USE_AVX
+			#define BT_USE_SSE_IN_API
+			#define BT_USE_AVX
 			#ifdef BT_USE_AVX
 
 #if (_MSC_FULL_VER >= 170050727)//Visual Studio 2012 can compile SSE4/FMA3 (but SSE4/FMA3 is not enabled by default)

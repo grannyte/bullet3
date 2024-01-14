@@ -28,7 +28,7 @@ subject to the following restrictions:
 
 // Don't set this to larger than 64, without modifying btThreadSupportPosix
 // and btThreadSupportWin32. They use UINT64 bit-masks.
-const unsigned int BT_MAX_THREAD_COUNT = 64;  // only if BT_THREADSAFE is 1
+const unsigned int BT_MAX_THREAD_COUNT = 96;  // only if BT_THREADSAFE is 1
 
 // for internal use only
 bool btIsMainThread();
@@ -102,7 +102,7 @@ class btIParallelForBody
 {
 public:
 	virtual ~btIParallelForBody() {}
-	virtual void forLoop(int iBegin, int iEnd) const = 0;
+	virtual void forLoop(const int iBegin,const int iEnd) const = 0;
 };
 
 //
@@ -168,7 +168,7 @@ btITaskScheduler* btGetPPLTaskScheduler();
 
 // btParallelFor -- call this to dispatch work like a for-loop
 //                 (iterations may be done out of order, so no dependencies are allowed)
-void btParallelFor(int iBegin, int iEnd, int grainSize, const btIParallelForBody& body);
+void btParallelFor(const int iBegin,const int iEnd,const int grainSize, const btIParallelForBody& body);
 
 // btParallelSum -- call this to dispatch work like a for-loop, returns the sum of all iterations
 //                 (iterations may be done out of order, so no dependencies are allowed)
