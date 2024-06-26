@@ -171,8 +171,8 @@ void btSimulationIslandManagerMt::initIslandPools()
 
 btSimulationIslandManagerMt::Island* btSimulationIslandManagerMt::getIsland(int id)
 {
-	//btAssert(id >= 0);
-	//btAssert(id < m_lookupIslandFromId.size());
+	btAssert(id >= 0);
+	btAssert(id < m_lookupIslandFromId.size());
 	if (id >= m_lookupIslandFromId.size())
 	{
 		printf("getIsland(%d) m_lookupIslandFromId.size()=%d , m_lookupIslandFromId.data=%p\n", id, m_lookupIslandFromId.size(), &m_lookupIslandFromId[0]);
@@ -391,7 +391,7 @@ void btSimulationIslandManagerMt::addBodiesToIslands(btCollisionWorld* collision
 				islandSleeping = false;
 			}
 		}
-		if (!islandSleeping)
+		//if (!islandSleeping)
 		{
 			// want to count the number of bodies before allocating the island to optimize memory usage of the Island structures
 			int numBodies = endIslandIndex - startIslandIndex;
@@ -404,6 +404,7 @@ void btSimulationIslandManagerMt::addBodiesToIslands(btCollisionWorld* collision
 				int i = getUnionFind().getElement(iElem).m_sz;
 				btCollisionObject* colObj = collisionObjects[i];
 				island->bodyArray.push_back(colObj);
+				colObj->setIslandTag(islandId);
 			}
 		}
 	}
