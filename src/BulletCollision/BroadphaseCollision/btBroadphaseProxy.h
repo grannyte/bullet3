@@ -48,8 +48,6 @@ enum BroadphaseNativeTypes
 	BOX_2D_SHAPE_PROXYTYPE,
 	CONVEX_2D_SHAPE_PROXYTYPE,
 	CUSTOM_CONVEX_SHAPE_TYPE,
-
-	PLANET_SHAPE_PROXYTYPE,
 	//concave shapes
 	CONCAVE_SHAPES_START_HERE,
 	//keep all the convex shapetype below here, for the check IsConvexShape in broadphase proxy!
@@ -63,6 +61,8 @@ enum BroadphaseNativeTypes
 	GIMPACT_SHAPE_PROXYTYPE,
 	///Multimaterial mesh
 	MULTIMATERIAL_TRIANGLE_MESH_PROXYTYPE,
+
+	PLANET_SHAPE_PROXYTYPE,
 
 	EMPTY_SHAPE_PROXYTYPE,
 	STATIC_PLANE_PROXYTYPE,
