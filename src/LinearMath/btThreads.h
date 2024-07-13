@@ -28,7 +28,7 @@ subject to the following restrictions:
 
 // Don't set this to larger than 64, without modifying btThreadSupportPosix
 // and btThreadSupportWin32. They use UINT64 bit-masks.
-const unsigned int BT_MAX_THREAD_COUNT = 96;  // only if BT_THREADSAFE is 1
+const unsigned int BT_MAX_THREAD_COUNT = 24;  // only if BT_THREADSAFE is 1
 
 // for internal use only
 bool btIsMainThread();
