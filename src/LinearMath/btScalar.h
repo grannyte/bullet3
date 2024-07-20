@@ -141,7 +141,7 @@ inline int btIsDoublePrecision()
 			//	#define BT_USE_SIMD_VECTOR3
 			#endif
 
-			#define BT_USE_SSE_IN_API
+			//#define BT_USE_SSE_IN_API
 			#define BT_USE_AVX
 			#ifdef BT_USE_AVX
 
@@ -459,7 +459,7 @@ inline int btIsDoublePrecision()
 		return _mm256_mul_pd(A, B);
 	}
 	#endif  //BT_NO_SIMD_OPERATOR_OVERLOADS
-
+	
 	#define btCastdTo256i(a) (_mm256_castpd_si256(a))
 	//#define btCastfTo128d(a) (_mm_castps_pd(a))
 	#define btCastiTo256d(a) (_mm256_castsi256_pd(a))

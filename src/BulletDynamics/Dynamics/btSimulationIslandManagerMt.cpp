@@ -391,7 +391,7 @@ void btSimulationIslandManagerMt::addBodiesToIslands(btCollisionWorld* collision
 				islandSleeping = false;
 			}
 		}
-		//if (!islandSleeping)
+		if (!islandSleeping)
 		{
 			// want to count the number of bodies before allocating the island to optimize memory usage of the Island structures
 			int numBodies = endIslandIndex - startIslandIndex;
@@ -442,7 +442,6 @@ void btSimulationIslandManagerMt::addManifoldsToIslands(btDispatcher* dispatcher
 				// scatter manifolds into various islands
 				int islandId = getIslandId(manifold);
 				// if island not sleeping,
-				if (islandId != -1)
 				if (Island* island = getIsland(islandId))
 				{
 					island->manifoldArray.push_back(manifold);
@@ -641,6 +640,7 @@ void btSimulationIslandManagerMt::buildAndProcessIslands(btDispatcher* dispatche
 
 	if (!getSplitIslands())
 	{
+		//printf("btSimulationIslandManagerMt::buildAndProcessIslands: getSplitIslands() is false\n");
 		btPersistentManifold** manifolds = dispatcher->getInternalManifoldPointer();
 		int maxNumManifolds = dispatcher->getNumManifolds();
 
@@ -682,6 +682,7 @@ void btSimulationIslandManagerMt::buildAndProcessIslands(btDispatcher* dispatche
 	}
 	else
 	{
+		//printf("btSimulationIslandManagerMt::buildAndProcessIslands: getSplitIslands() is true\n");
 		initIslandPools();
 
 		//traverse the simulation islands, and call the solver, unless all objects are sleeping/deactivated

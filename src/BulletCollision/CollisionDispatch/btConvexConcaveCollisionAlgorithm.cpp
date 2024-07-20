@@ -103,7 +103,7 @@ void btConvexTriangleCallback::processTriangle(btVector3* triangle, int partId, 
 
 	if (m_convexBodyWrap->getCollisionShape()->isConvex())
 	{
-#ifdef BT_ENABLE_CONVEX_CONCAVE_EARLY_OUT
+#if 1
     //todo: check this issue https://github.com/bulletphysics/bullet3/issues/4263
 		//an early out optimisation if the object is separated from the triangle
 		//projected on the triangle normal)

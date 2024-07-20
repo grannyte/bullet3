@@ -175,8 +175,8 @@ static inline __m256d btSimdDot3AVX(__m256d vec0, __m256d vec1)
 //	return _mm_cvtsd_f64(dotproduct);
 //}
 
-#if USE_FMA
-#if USE_FMA3_INSTEAD_FMA4
+#if AVX_USE_FMA
+#if AVX_USE_FMA3_INSTEAD_FMA4
 // a*b + c
 #define FMADD(a, b, c) _mm256_fmadd_pd(a, b, c)
 // -(a*b) + c
@@ -277,7 +277,18 @@ static btScalar gResolveSingleConstraintRowGeneric_avx(btSolverBody& body1, btSo
 	body1.internalGetDeltaAngularVelocity().mVec128 = FMADD(c.m_angularComponentA.mVec128, deltaImpulse, body1.internalGetDeltaAngularVelocity().mVec128);
 	body2.internalGetDeltaLinearVelocity().mVec128 = FMADD(_mm256_mul_pd(c.m_contactNormal2.mVec128, body2.internalGetInvMass().mVec128), deltaImpulse, body2.internalGetDeltaLinearVelocity().mVec128);
 	body2.internalGetDeltaAngularVelocity().mVec128 = FMADD(c.m_angularComponentB.mVec128, deltaImpulse, body2.internalGetDeltaAngularVelocity().mVec128);
-	return deltaImpulse.m256d_f64[0];
+	//extract the scalar result from the vector in the correct way
+
+
+	btScalar deltaImp[4];
+	_mm256_storeu_pd(deltaImp, deltaImpulse);
+	deltaImp[0] = deltaImp[0] * (1. / c.m_jacDiagABInv);
+	//printf("deltaImp[0] = %f versus scalar reference = %f\n", deltaImp[0], gResolveSingleConstraintRowGeneric_scalar_reference(body1, body2, c));
+
+	return deltaImp[0];
+
+
+	// incorrect way : return deltaImpulse.m256d_f64[0];
 }
 #endif
 
@@ -354,7 +365,12 @@ static btScalar gResolveSingleConstraintRowLowerLimit_avx(btSolverBody& body1, b
 	body1.internalGetDeltaAngularVelocity().mVec128 = FMADD(c.m_angularComponentA.mVec128, deltaImpulse, body1.internalGetDeltaAngularVelocity().mVec128);
 	body2.internalGetDeltaLinearVelocity().mVec128 = FMADD(_mm256_mul_pd(c.m_contactNormal2.mVec128, body2.internalGetInvMass().mVec128), deltaImpulse, body2.internalGetDeltaLinearVelocity().mVec128);
 	body2.internalGetDeltaAngularVelocity().mVec128 = FMADD(c.m_angularComponentB.mVec128, deltaImpulse, body2.internalGetDeltaAngularVelocity().mVec128);
-	return deltaImpulse.m256d_f64[0];
+	//extract the scalar result from the vector in the correct way
+	btScalar deltaImp[4];
+	_mm256_storeu_pd(deltaImp, deltaImpulse);
+	deltaImp[0] = deltaImp[0] * (1. / c.m_jacDiagABInv);
+	//printf("deltaImp[0] = %f versus scalar reference = %f\n", deltaImp[0], gResolveSingleConstraintRowLowerLimit_scalar_reference(body1, body2, c));
+	return deltaImp[0];
 }
 #endif
 
@@ -480,7 +496,12 @@ static btScalar gResolveSplitPenetrationImpulse_avx(btSolverBody& body1, btSolve
 	body1.internalGetTurnVelocity().mVec128 = _mm256_add_pd(body1.internalGetTurnVelocity().mVec128, _mm256_mul_pd(c.m_angularComponentA.mVec128, impulseMagnitude));
 	body2.internalGetPushVelocity().mVec128 = _mm256_add_pd(body2.internalGetPushVelocity().mVec128, _mm256_mul_pd(linearComponentB, impulseMagnitude));
 	body2.internalGetTurnVelocity().mVec128 = _mm256_add_pd(body2.internalGetTurnVelocity().mVec128, _mm256_mul_pd(c.m_angularComponentB.mVec128, impulseMagnitude));
-	return deltaImpulse.m256d_f64[0];
+	//extract the scalar result from the vector in the correct way
+	btScalar deltaImp[4];
+	_mm256_storeu_pd(deltaImp, deltaImpulse);
+	deltaImp[0] = deltaImp[0] * (1. / c.m_jacDiagABInv);
+	//printf("deltaImp[0] = %f vs reference implementation = %f\n", deltaImp[0], gResolveSplitPenetrationImpulse_scalar_reference(body1, body2, c));
+	return deltaImp[0];
 }
 #endif
 
@@ -1645,6 +1666,8 @@ btScalar btSequentialImpulseConstraintSolver::solveGroupCacheFriendlySetup(btCol
 				}
 			}
 			btAssert(found);
+			if(!found)
+				printf("not found manifoldPtr[%d]->getBody1() %p , userindex %d\n", i, manifoldPtr[i]->getBody1(), manifoldPtr[i]->getBody1()->getUserIndex());
 		}
 	}
 #endif  //BT_ADDITIONAL_DEBUG

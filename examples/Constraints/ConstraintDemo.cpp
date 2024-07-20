@@ -22,6 +22,9 @@ subject to the following restrictions:
 #include <cmath>
 
 #include "../CommonInterfaces/CommonRigidBodyBase.h"
+#include "BulletCollision/CollisionDispatch/btCollisionDispatcherMt.h"
+#include <BulletDynamics/Dynamics/btDiscreteDynamicsWorldMt.h>
+#include "BulletDynamics/ConstraintSolver/btSequentialImpulseConstraintSolverMt.h"
 
 ///AllConstraintDemo shows how to create a constraint, like Hinge or btGenericD6constraint
 class AllConstraintDemo : public CommonRigidBodyBase
@@ -76,11 +79,34 @@ static bool s_bTestConeTwistMotor = false;
 
 void AllConstraintDemo::setupEmptyDynamicsWorld()
 {
-	m_collisionConfiguration = new btDefaultCollisionConfiguration();
-	m_dispatcher = new btCollisionDispatcher(m_collisionConfiguration);
-	m_broadphase = new btDbvtBroadphase();
-	m_solver = new btSequentialImpulseConstraintSolver();
-	m_dynamicsWorld = new btDiscreteDynamicsWorld(m_dispatcher, m_broadphase, m_solver, m_collisionConfiguration);
+	printf("AllConstraintDemo::setupEmptyDynamicsWorld\n");
+	
+	auto taskScheduler = btGetPPLTaskScheduler();
+
+	taskScheduler->setNumThreads(24);
+	btSetTaskScheduler(taskScheduler);
+	btDefaultCollisionConstructionInfo cci;
+		cci.m_defaultMaxPersistentManifoldPoolSize = 80000;
+		cci.m_defaultMaxCollisionAlgorithmPoolSize = 80000;
+		m_collisionConfiguration = new btDefaultCollisionConfiguration(cci);
+
+		m_dispatcher = new btCollisionDispatcherMt(m_collisionConfiguration, 40);
+		m_broadphase = new btDbvtBroadphase();
+
+		btConstraintSolverPoolMt* solverPool;
+		{
+			btConstraintSolver* solvers[BT_MAX_THREAD_COUNT];
+			int maxThreadCount = BT_MAX_THREAD_COUNT;
+			for (int i = 0; i < maxThreadCount; ++i)
+			{
+			solvers[i] = new btSequentialImpulseConstraintSolver();
+			}
+			solverPool = new btConstraintSolverPoolMt(solvers, maxThreadCount);
+			m_solver = solverPool;
+		}
+		btSequentialImpulseConstraintSolverMt* solverMt = new btSequentialImpulseConstraintSolverMt();
+		btDiscreteDynamicsWorld* world = new btDiscreteDynamicsWorldMt(m_dispatcher, m_broadphase, solverPool, solverMt, m_collisionConfiguration);
+		m_dynamicsWorld = world;
 }
 
 void AllConstraintDemo::initPhysics()

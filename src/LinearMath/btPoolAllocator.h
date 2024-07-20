@@ -15,9 +15,10 @@ subject to the following restrictions:
 #ifndef _BT_POOL_ALLOCATOR_H
 #define _BT_POOL_ALLOCATOR_H
 
+#include <concurrent_queue.h>
 #include "btScalar.h"
 #include "btAlignedAllocator.h"
-#include "btThreads.h"
+#include "MPMCQueue.h"
 
 ///The btPoolAllocator class allows to efficiently allocate a large pool of objects, instead of dynamically allocating them separately.
 class btPoolAllocator
@@ -28,11 +29,14 @@ class btPoolAllocator
 	void* m_firstFree;
 	unsigned char* m_pool;
 	btSpinMutex m_mutex;  // only used if BT_THREADSAFE
+	#if BT_THREADSAFE
+	rigtorp::mpmc::Queue<void*> m_freeQueue;  // only used if BT_THREADSAFE
+	#endif
 
 public:
 	btPoolAllocator(int elemSize, int maxElements)
 		: m_elemSize(elemSize),
-		  m_maxElements(maxElements)
+		  m_maxElements(maxElements),m_freeQueue(maxElements)
 	{
 		m_pool = (unsigned char*)btAlignedAlloc(static_cast<unsigned int>(m_elemSize * m_maxElements), 16);
 
@@ -42,9 +46,15 @@ public:
 		int count = m_maxElements;
 		while (--count)
 		{
+			#if BT_THREADSAFE
+			m_freeQueue.push(p);
+			#endif
 			*(void**)p = (p + m_elemSize);
 			p += m_elemSize;
 		}
+		#if BT_THREADSAFE
+		m_freeQueue.push(p);
+		#endif
 		*(void**)p = 0;
 	}
 
@@ -70,6 +80,15 @@ public:
 
 	void* allocate(int size)
 	{
+		
+	#if BT_THREADSAFE
+
+	void* ptr = NULL;
+	m_freeQueue.pop(ptr);
+	return ptr;
+	#endif
+
+
 		// release mode fix
 		(void)size;
 		btMutexLock(&m_mutex);
@@ -101,6 +120,10 @@ public:
 	{
 		if (ptr)
 		{
+			#if BT_THREADSAFE
+			m_freeQueue.push(ptr);
+			return;
+			#endif
 			btAssert((unsigned char*)ptr >= m_pool && (unsigned char*)ptr < m_pool + m_maxElements * m_elemSize);
 
 			btMutexLock(&m_mutex);
