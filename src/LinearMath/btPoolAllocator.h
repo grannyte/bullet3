@@ -36,7 +36,10 @@ class btPoolAllocator
 public:
 	btPoolAllocator(int elemSize, int maxElements)
 		: m_elemSize(elemSize),
-		  m_maxElements(maxElements),m_freeQueue(maxElements)
+		  m_maxElements(maxElements)
+	#if BT_THREADSAFE
+		,m_freeQueue(maxElements)
+		#endif
 	{
 		m_pool = (unsigned char*)btAlignedAlloc(static_cast<unsigned int>(m_elemSize * m_maxElements), 16);
 
