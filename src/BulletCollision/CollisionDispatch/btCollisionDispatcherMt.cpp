@@ -28,8 +28,8 @@ subject to the following restrictions:
 btCollisionDispatcherMt::btCollisionDispatcherMt(btCollisionConfiguration* config, int grainSize)
 	: btCollisionDispatcher(config)
 {
-	m_batchManifoldsPtr.resize(btGetTaskScheduler()->getNumThreads()*4);
-	m_batchReleasePtr.resize(btGetTaskScheduler()->getNumThreads()*4);
+	m_batchManifoldsPtr.resize(btGetTaskScheduler()->getNumThreads()*2);
+	m_batchReleasePtr.resize(btGetTaskScheduler()->getNumThreads()*2);
 
 	m_batchUpdating = false;
 	m_grainSize = grainSize;  // iterations per task
@@ -64,11 +64,9 @@ btPersistentManifold* btCollisionDispatcherMt::getNewManifold(const btCollisionO
 	{
 		// batch updater will update manifold pointers array after finishing, so
 		// only need to update array when not batch-updating
-		//btAssert( !btThreadsAreRunning() );
-		btMutexLock(&m_manifoldsPtrMutex);
+		btAssert( !btThreadsAreRunning() );
 		manifold->m_index1a = m_manifoldsPtr.size();
 		m_manifoldsPtr.push_back(manifold);
-		btMutexUnlock(&m_manifoldsPtrMutex);
 	}
 	else
 	{
@@ -88,13 +86,11 @@ void btCollisionDispatcherMt::releaseManifold(btPersistentManifold* manifold)
 		clearManifold(manifold);
 		// batch updater will update manifold pointers array after finishing, so
 		// only need to update array when not batch-updating
-		btMutexLock(&m_manifoldsPtrMutex);
 		int findIndex = manifold->m_index1a;
 		btAssert(findIndex < m_manifoldsPtr.size());
 		m_manifoldsPtr.swap(findIndex, m_manifoldsPtr.size() - 1);
 		m_manifoldsPtr[findIndex]->m_index1a = findIndex;
 		m_manifoldsPtr.pop_back();
-		btMutexUnlock(&m_manifoldsPtrMutex);
 	} else {
 		m_batchReleasePtr[btGetCurrentThreadIndex()].push_back(manifold);
 		return;
@@ -159,6 +155,7 @@ void btCollisionDispatcherMt::dispatchAllCollisionPairs(btOverlappingPairCache* 
 
 		for (int j = 0; j < batchManifoldsPtr.size(); ++j)
 		{
+			batchManifoldsPtr[j]->m_index1a = m_manifoldsPtr.size();
 			m_manifoldsPtr.push_back(batchManifoldsPtr[j]);
 		}
 
@@ -179,10 +176,6 @@ void btCollisionDispatcherMt::dispatchAllCollisionPairs(btOverlappingPairCache* 
 	// update the indices (used when releasing manifolds)
 	for (int i = 0; i < m_manifoldsPtr.size(); ++i)
 	{
-		while (!m_manifoldsPtr[i])
-		{
-			m_manifoldsPtr.removeAtIndex(i);
-		}
 		m_manifoldsPtr[i]->m_index1a = i;
 	}
 }

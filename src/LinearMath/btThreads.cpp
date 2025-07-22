@@ -231,7 +231,7 @@ struct ThreadsafeCounter
 		mCounter++;
 		if (mCounter >= BT_MAX_THREAD_COUNT)
 		{
-			//btAssert(!"thread counter exceeded");
+			btAssert(!"thread counter exceeded");
 			// wrap back to the first worker index
 			mCounter = 1;
 		}
@@ -285,15 +285,17 @@ static ThreadId_t getDebugThreadId()
 }
 
 #endif  // #if BT_DETECT_BAD_THREAD_INDEX
-
+unsigned int TreadIDCycle = 0;
 // return a unique index per thread, main thread is 0, worker threads are in [1, BT_MAX_THREAD_COUNT)
 unsigned int btGetCurrentThreadIndex()
 {
 	const unsigned int kNullIndex = ~0U;
 	THREAD_LOCAL_STATIC unsigned int sThreadIndex = kNullIndex;
-	if (sThreadIndex == kNullIndex)
+	THREAD_LOCAL_STATIC unsigned int sTreadIDCycle = TreadIDCycle;
+	if (sThreadIndex == kNullIndex || TreadIDCycle != sTreadIDCycle)
 	{
 		sThreadIndex = gThreadCounter.getNext();
+		sTreadIDCycle = TreadIDCycle;
 		btAssert(sThreadIndex < BT_MAX_THREAD_COUNT);
 	}
 #if BT_DETECT_BAD_THREAD_INDEX
@@ -329,8 +331,9 @@ bool btIsMainThread()
 void btResetThreadIndexCounter()
 {
 	// for when all current worker threads are destroyed
-	btAssert(btIsMainThread());
+	//btAssert(btIsMainThread());
 	gThreadCounter.mCounter = 0;
+	++TreadIDCycle;
 }
 
 btITaskScheduler::btITaskScheduler(const char* name)
@@ -672,9 +675,9 @@ public:
 		// capping the thread count for PPL due to a thread-index issue
 		const int maxThreadCount = (std::min)(int(BT_MAX_THREAD_COUNT), 31);
 		m_numThreads = (std::max)(1, (std::min)(maxThreadCount, numThreads));
-		/*
+		
 		using namespace concurrency;
-		if (CurrentScheduler::Id() != -1)
+		/*/if (CurrentScheduler::Id() != -1)
 		{
 			CurrentScheduler::Detach();
 		}
@@ -714,10 +717,12 @@ public:
 		ForBodyAdapter pplBody(&body, grainSize, iEnd);
 		btPushThreadsAreRunning();
 		// note: MSVC 2010 doesn't support partitioner args, so avoid them
+		// note: MSVC 2012 and later support partitioner args,use simple_partitioner to avoid partitioning overhead
 		concurrency::parallel_for(iBegin,
 								  iEnd,
 								  grainSize,
-								  pplBody);
+								  pplBody,
+			concurrency::static_partitioner());  // use static partitioner to avoid partitioning overhead
 		btPopThreadsAreRunning();
 	}
 	struct SumBodyAdapter
@@ -741,11 +746,12 @@ public:
 		m_sum.clear();
 		SumBodyAdapter pplBody(&body, &m_sum, grainSize, iEnd);
 		btPushThreadsAreRunning();
-		// note: MSVC 2010 doesn't support partitioner args, so avoid them
+		//use simple_partitioner to avoid partitioning overhead
 		concurrency::parallel_for(iBegin,
 								  iEnd,
 								  grainSize,
-								  pplBody);
+								  pplBody,
+			concurrency::static_partitioner());  // use static partitioner to avoid partitioning overhead
 		btPopThreadsAreRunning();
 		return m_sum.combine(sumFunc);
 	}

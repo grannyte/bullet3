@@ -23,7 +23,6 @@ subject to the following restrictions:
 
 #include "BulletCollision/BroadphaseCollision/btBroadphaseProxy.h"
 #include "LinearMath/btAlignedObjectArray.h"
-#include "LinearMath\btThreads.h"
 
 class btIDebugDraw;
 class btOverlappingPairCache;
@@ -44,7 +43,6 @@ class btCollisionDispatcher : public btDispatcher
 {
 protected:
 	int m_dispatcherFlags;
-	btSpinMutex m_manifoldsPtrMutex;
 	btAlignedObjectArray<btPersistentManifold*> m_manifoldsPtr;
 
 	btNearCallback m_nearCallback;

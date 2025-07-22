@@ -15,49 +15,37 @@ subject to the following restrictions:
 #ifndef _BT_POOL_ALLOCATOR_H
 #define _BT_POOL_ALLOCATOR_H
 
-#include <concurrent_queue.h>
 #include "btScalar.h"
 #include "btAlignedAllocator.h"
-#include "MPMCQueue.h"
+#include "btThreads.h"
+#include <atomic>
 
 ///The btPoolAllocator class allows to efficiently allocate a large pool of objects, instead of dynamically allocating them separately.
 class btPoolAllocator
 {
 	int m_elemSize;
 	int m_maxElements;
-	int m_freeCount;
+	std::atomic_int m_freeCount;
 	void* m_firstFree;
 	unsigned char* m_pool;
 	btSpinMutex m_mutex;  // only used if BT_THREADSAFE
-	#if BT_THREADSAFE
-	rigtorp::mpmc::Queue<void*> m_freeQueue;  // only used if BT_THREADSAFE
-	#endif
 
 public:
 	btPoolAllocator(int elemSize, int maxElements)
 		: m_elemSize(elemSize),
 		  m_maxElements(maxElements)
-	#if BT_THREADSAFE
-		,m_freeQueue(maxElements)
-		#endif
 	{
 		m_pool = (unsigned char*)btAlignedAlloc(static_cast<unsigned int>(m_elemSize * m_maxElements), 16);
 
 		unsigned char* p = m_pool;
 		m_firstFree = p;
-		m_freeCount = m_maxElements;
+		m_freeCount =m_maxElements;
 		int count = m_maxElements;
 		while (--count)
 		{
-			#if BT_THREADSAFE
-			m_freeQueue.push(p);
-			#endif
 			*(void**)p = (p + m_elemSize);
 			p += m_elemSize;
 		}
-		#if BT_THREADSAFE
-		m_freeQueue.push(p);
-		#endif
 		*(void**)p = 0;
 	}
 
@@ -83,33 +71,26 @@ public:
 
 	void* allocate(int size)
 	{
-		
-	#if BT_THREADSAFE
-
-	void* ptr = NULL;
-	m_freeQueue.pop(ptr);
-	return ptr;
-	#endif
-
-
 		// release mode fix
 		(void)size;
-		btMutexLock(&m_mutex);
 		btAssert(!size || size <= m_elemSize);
 		//btAssert(m_freeCount>0);  // should return null if all full
+		btMutexLock(&m_mutex);
 		void* result = m_firstFree;
 		if (NULL != m_firstFree)
 		{
 			m_firstFree = *(void**)m_firstFree;
-			--m_freeCount;
 		}
 		btMutexUnlock(&m_mutex);
+		if(NULL !=result)
+			--m_freeCount;
 		return result;
 	}
 
 	bool validPtr(void* ptr)
 	{
 		if (ptr)
+
 		{
 			if (((unsigned char*)ptr >= m_pool && (unsigned char*)ptr < m_pool + m_maxElements * m_elemSize))
 			{
@@ -123,17 +104,13 @@ public:
 	{
 		if (ptr)
 		{
-			#if BT_THREADSAFE
-			m_freeQueue.push(ptr);
-			return;
-			#endif
 			btAssert((unsigned char*)ptr >= m_pool && (unsigned char*)ptr < m_pool + m_maxElements * m_elemSize);
 
 			btMutexLock(&m_mutex);
 			*(void**)ptr = m_firstFree;
 			m_firstFree = ptr;
-			++m_freeCount;
 			btMutexUnlock(&m_mutex);
+			++m_freeCount;
 		}
 	}
 

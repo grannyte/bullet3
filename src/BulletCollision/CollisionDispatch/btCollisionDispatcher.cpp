@@ -272,6 +272,7 @@ void* btCollisionDispatcher::allocateCollisionAlgorithm(int size)
 	{
 		//warn user for overflow?
 		return btAlignedAlloc(static_cast<size_t>(size), 16);
+		printf("btCollisionDispatcher::allocateCollisionAlgorithm: memory pool overflow, falling back to btAlignedAlloc\n");
 	}
 	return mem;
 }
