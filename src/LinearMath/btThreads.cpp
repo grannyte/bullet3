@@ -213,6 +213,10 @@ bool btSpinMutex::tryLock()
 
 #endif  // #else //#if BT_THREADSAFE
 
+// Thread indexes are no longer used to own scratch storage -- btCollisionDispatcherMt batches by
+// task ordinal and btDbvtBroadphase::rayTest uses a local stack -- so this counter only labels
+// threads for the profiler and for the solver-pool starting hint. It never has to stay below
+// BT_MAX_THREAD_COUNT, and it never needs resetting.
 struct ThreadsafeCounter
 {
 	unsigned int mCounter;
@@ -226,24 +230,18 @@ struct ThreadsafeCounter
 
 	unsigned int getNext()
 	{
-		// no need to optimize this with atomics, it is only called ONCE per thread!
+		// only called ONCE per thread
 		mMutex.lock();
-		mCounter++;
-		if (mCounter >= BT_MAX_THREAD_COUNT)
-		{
-			btAssert(!"thread counter exceeded");
-			// wrap back to the first worker index
-			mCounter = 1;
-		}
-		unsigned int val = mCounter;
+		unsigned int val = ++mCounter;
 		mMutex.unlock();
 		return val;
 	}
 };
 
 static btITaskScheduler* gBtTaskScheduler=0;
-static int gThreadsRunningCounter = 0;  // useful for detecting if we are trying to do nested parallel-for calls
-static btSpinMutex gThreadsRunningCounterMutex;
+// per-thread: nesting is a property of the calling thread. A global counter reports "some other
+// thread is in a dispatch", which is permanently true once worlds step concurrently.
+static thread_local int gThreadsRunningCounter = 0;
 static ThreadsafeCounter gThreadCounter;
 
 //
@@ -285,18 +283,14 @@ static ThreadId_t getDebugThreadId()
 }
 
 #endif  // #if BT_DETECT_BAD_THREAD_INDEX
-unsigned int TreadIDCycle = 0;
 // return a unique index per thread, main thread is 0, worker threads are in [1, BT_MAX_THREAD_COUNT)
 unsigned int btGetCurrentThreadIndex()
 {
 	const unsigned int kNullIndex = ~0U;
 	THREAD_LOCAL_STATIC unsigned int sThreadIndex = kNullIndex;
-	THREAD_LOCAL_STATIC unsigned int sTreadIDCycle = TreadIDCycle;
-	if (sThreadIndex == kNullIndex || TreadIDCycle != sTreadIDCycle)
+	if (sThreadIndex == kNullIndex)
 	{
 		sThreadIndex = gThreadCounter.getNext();
-		sTreadIDCycle = TreadIDCycle;
-		btAssert(sThreadIndex < BT_MAX_THREAD_COUNT);
 	}
 #if BT_DETECT_BAD_THREAD_INDEX
 	if (gBtTaskScheduler && sThreadIndex > 0)
@@ -330,10 +324,9 @@ bool btIsMainThread()
 
 void btResetThreadIndexCounter()
 {
-	// for when all current worker threads are destroyed
-	//btAssert(btIsMainThread());
-	gThreadCounter.mCounter = 0;
-	++TreadIDCycle;
+	// No-op. Reassigning indexes while any worker is still running used to hand a live index to a
+	// second thread; nothing owns scratch storage by thread index any more, so there is nothing to
+	// reclaim and no reason to renumber. Kept because it is public API.
 }
 
 btITaskScheduler::btITaskScheduler(const char* name)
@@ -369,16 +362,13 @@ void btITaskScheduler::deactivate()
 
 void btPushThreadsAreRunning()
 {
-	gThreadsRunningCounterMutex.lock();
+	// thread-local, so no mutex needed
 	gThreadsRunningCounter++;
-	gThreadsRunningCounterMutex.unlock();
 }
 
 void btPopThreadsAreRunning()
 {
-	gThreadsRunningCounterMutex.lock();
 	gThreadsRunningCounter--;
-	gThreadsRunningCounterMutex.unlock();
 }
 
 bool btThreadsAreRunning()
@@ -656,7 +646,6 @@ public:
 class btTaskSchedulerPPL : public btITaskScheduler
 {
 	int m_numThreads;
-	concurrency::combinable<btScalar> m_sum;  // for parallelSum
 public:
 	btTaskSchedulerPPL() : btITaskScheduler("PPL")
 	{
@@ -743,8 +732,14 @@ public:
 	virtual btScalar parallelSum(int iBegin, int iEnd, int grainSize, const btIParallelSumBody& body) BT_OVERRIDE
 	{
 		BT_PROFILE("parallelSum_PPL");
-		m_sum.clear();
-		SumBodyAdapter pplBody(&body, &m_sum, grainSize, iEnd);
+		// Local, not the (formerly) member m_sum: with every physics sub-world now stepping
+		// concurrently (see CBulletThread/PhysicsSubWorldSystem), two worlds' solvers can call
+		// parallelSum on the SAME btTaskSchedulerPPL instance (the task scheduler is process-
+		// global) at the same time. A shared combinable's clear()->accumulate->combine() from two
+		// callers at once corrupts both results. TBB/OpenMP schedulers already use a local here;
+		// PPL was the odd one out.
+		concurrency::combinable<btScalar> sum;
+		SumBodyAdapter pplBody(&body, &sum, grainSize, iEnd);
 		btPushThreadsAreRunning();
 		//use simple_partitioner to avoid partitioning overhead
 		concurrency::parallel_for(iBegin,
@@ -753,7 +748,7 @@ public:
 								  pplBody,
 			concurrency::static_partitioner());  // use static partitioner to avoid partitioning overhead
 		btPopThreadsAreRunning();
-		return m_sum.combine(sumFunc);
+		return sum.combine(sumFunc);
 	}
 };
 #endif  // #if BT_USE_PPL && BT_THREADSAFE

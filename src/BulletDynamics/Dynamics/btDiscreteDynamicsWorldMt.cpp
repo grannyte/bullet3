@@ -54,7 +54,10 @@ btConstraintSolverPoolMt::ThreadSolver* btConstraintSolverPoolMt::getAndLockThre
 {
 	int i = 0;
 #if BT_THREADSAFE
-	i = btGetCurrentThreadIndex() % m_solvers.size();
+	// just a starting hint to spread callers out -- the tryLock/probe below is what actually
+	// guarantees exclusivity, so this needs no thread identity and no shared counter
+	static thread_local unsigned int sRoundRobin = 0;
+	i = (++sRoundRobin) % m_solvers.size();
 #endif  // #if BT_THREADSAFE
 	while (true)
 	{

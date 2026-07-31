@@ -25,12 +25,16 @@ subject to the following restrictions:
 #include "BulletCollision/CollisionDispatch/btCollisionConfiguration.h"
 #include "BulletCollision/CollisionDispatch/btCollisionObjectWrapper.h"
 
+// Slot the running task batches its manifolds into. Set by CollisionDispatcherUpdater::forLoop from
+// the task's own loop range, so it is unique per concurrent task by construction -- no thread
+// registry, no ceiling. Thread-local only because getNewManifold() is called deep in the near
+// callback and cannot see the loop range; a thread runs one task at a time.
+static thread_local int gBatchSlot = 0;
+
 btCollisionDispatcherMt::btCollisionDispatcherMt(btCollisionConfiguration* config, int grainSize)
 	: btCollisionDispatcher(config)
 {
-	m_batchManifoldsPtr.resize(btGetTaskScheduler()->getNumThreads()*2);
-	m_batchReleasePtr.resize(btGetTaskScheduler()->getNumThreads()*2);
-
+	// sized per dispatch from the grain count, see dispatchAllCollisionPairs
 	m_batchUpdating = false;
 	m_grainSize = grainSize;  // iterations per task
 }
@@ -70,7 +74,7 @@ btPersistentManifold* btCollisionDispatcherMt::getNewManifold(const btCollisionO
 	}
 	else
 	{
-		m_batchManifoldsPtr[btGetCurrentThreadIndex()].push_back(manifold);
+		m_batchManifoldsPtr[gBatchSlot].push_back(manifold);
 	}
 
 	return manifold;
@@ -78,10 +82,9 @@ btPersistentManifold* btCollisionDispatcherMt::getNewManifold(const btCollisionO
 
 void btCollisionDispatcherMt::releaseManifold(btPersistentManifold* manifold)
 {
-	//btAssert( !btThreadsAreRunning() );
-	
 	if (!m_batchUpdating)
 	{
+		btAssert( !btThreadsAreRunning() );
 
 		clearManifold(manifold);
 		// batch updater will update manifold pointers array after finishing, so
@@ -92,7 +95,7 @@ void btCollisionDispatcherMt::releaseManifold(btPersistentManifold* manifold)
 		m_manifoldsPtr[findIndex]->m_index1a = findIndex;
 		m_manifoldsPtr.pop_back();
 	} else {
-		m_batchReleasePtr[btGetCurrentThreadIndex()].push_back(manifold);
+		m_batchReleasePtr[gBatchSlot].push_back(manifold);
 		return;
 	}
 
@@ -113,6 +116,7 @@ struct CollisionDispatcherUpdater : public btIParallelForBody
 	btNearCallback mCallback;
 	btCollisionDispatcher* mDispatcher;
 	const btDispatcherInfo* mInfo;
+	int mGrainSize;
 
 	CollisionDispatcherUpdater()
 	{
@@ -120,9 +124,14 @@ struct CollisionDispatcherUpdater : public btIParallelForBody
 		mCallback = NULL;
 		mDispatcher = NULL;
 		mInfo = NULL;
+		mGrainSize = 1;
 	}
 	void forLoop(const int iBegin, const int iEnd) const
 	{
+		// btParallelFor splits the range at multiples of the grain size, so this ordinal is unique
+		// among tasks running at the same time -- and is the same whether the loop ran in parallel
+		// or serially.
+		gBatchSlot = iBegin / mGrainSize;
 		for (int i = iBegin; i < iEnd; ++i)
 		{
 			btBroadphasePair* pair = &mPairArray[i];
@@ -143,6 +152,16 @@ void btCollisionDispatcherMt::dispatchAllCollisionPairs(btOverlappingPairCache* 
 	updater.mPairArray = pairCache->getOverlappingPairArrayPtr();
 	updater.mDispatcher = this;
 	updater.mInfo = &info;
+	updater.mGrainSize = m_grainSize;
+
+	// one slot per task, not per thread -- grows to the high-water mark and keeps its capacity,
+	// since the merge loops below only resize the inner arrays back to 0.
+	const int numGrains = (pairCount + m_grainSize - 1) / m_grainSize;
+	if (m_batchManifoldsPtr.size() < numGrains)
+	{
+		m_batchManifoldsPtr.resize(numGrains);
+		m_batchReleasePtr.resize(numGrains);
+	}
 
 	m_batchUpdating = true;
 	btParallelFor(0, pairCount, m_grainSize, updater);
