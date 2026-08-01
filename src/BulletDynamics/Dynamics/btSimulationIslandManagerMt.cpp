@@ -461,6 +461,19 @@ void btSimulationIslandManagerMt::addConstraintsToIslands(btAlignedObjectArray<b
 		if (constraint->isEnabled())
 		{
 			int islandId = btGetConstraintIslandId1(constraint);
+			if (islandId < 0 || islandId >= m_lookupIslandFromId.size())
+			{
+				const btRigidBody& a = constraint->getRigidBodyA();
+				const btRigidBody& b = constraint->getRigidBodyB();
+				printf("bad constraint island id=%d lookup=%d unionFindElems=%d numConstraints=%d\n"
+					"  A userIndex=%d islandTag=%d invMass=%f flags=0x%x worldArrayIndex=%d activation=%d\n"
+					"  B userIndex=%d islandTag=%d invMass=%f flags=0x%x worldArrayIndex=%d activation=%d\n",
+					islandId, m_lookupIslandFromId.size(), getUnionFind().getNumElements(), constraints.size(),
+					a.getUserIndex(), a.getIslandTag(), a.getInvMass(), a.getCollisionFlags(),
+					a.getWorldArrayIndex(), a.getActivationState(),
+					b.getUserIndex(), b.getIslandTag(), b.getInvMass(), b.getCollisionFlags(),
+					b.getWorldArrayIndex(), b.getActivationState());
+			}
 			// if island is not sleeping,
 			if (Island* island = getIsland(islandId))
 			{
