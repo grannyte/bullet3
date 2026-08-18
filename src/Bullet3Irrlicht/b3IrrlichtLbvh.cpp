@@ -30,7 +30,10 @@ b3IrrlichtLbvh::b3IrrlichtLbvh(irr::video::IVideoDriver* driver)
 	  m_aabbBuffer(0), m_mergedBuffer(0),
 	  m_mortonBuffer(0), m_mergeMaterial(-1), m_mortonMaterial(-1),
 	  m_prefixMaterial(-1), m_leafMaterial(-1), m_internalMaterial(-1), m_distanceMaterial(-1),
-	  m_treeAabbMaterial(-1), m_treeParamBuffer(0), m_sortedMortonBuffer(0), m_commonPrefixBuffer(0),
+	  m_treeAabbMaterial(-1), m_markDirtyMaterial(-1), m_refitDirtyMaterial(-1),
+	  m_refitParamBuffer(0), m_dirtyStampBuffer(0), m_dirtyNodeBuffer(0), m_dirtyNodeCountBuffer(0),
+	  m_dirtyCountParamBuffer(0), m_dirtyStampCapacity(0), m_refitFrameStamp(0),
+	  m_treeParamBuffer(0), m_sortedMortonBuffer(0), m_commonPrefixBuffer(0),
 	  m_commonPrefixLenBuffer(0), m_childNodeBuffer(0), m_leafParentBuffer(0), m_internalParentBuffer(0),
 	  m_rootIndexBuffer(0), m_distanceBuffer(0), m_internalAabbBuffer(0),
 	  m_leafRangeMaterial(-1), m_pairsMaterial(-1), m_pairParamBuffer(0),
@@ -38,7 +41,10 @@ b3IrrlichtLbvh::b3IrrlichtLbvh(irr::video::IVideoDriver* driver)
 	  m_rayMaterial(-1), m_rayBuffer(0), m_rayPairBuffer(0),
 	  m_separateMaterial(-1), m_largePairMaterial(-1), m_largeLargePairMaterial(-1),
 	  m_largeRayMaterial(-1), m_separateParamBuffer(0), m_smallIndexBuffer(0),
-	  m_largeIndexBuffer(0), m_largeAabbBuffer(0)
+	  m_largeIndexBuffer(0), m_largeAabbBuffer(0),
+	  m_leafIdentityBuffer(0), m_leafIdentityCount(0),
+	  m_cachedRootIndex(0), m_cachedMaxDistance(0), m_cachedSortedCodes(0), m_cachedLeafCount(0),
+	  m_cachedLeafRangeCount(0), m_leafRangeCaching(true)
 {
 }
 
@@ -56,6 +62,11 @@ b3IrrlichtLbvh::~b3IrrlichtLbvh()
 	if (m_rootIndexBuffer) m_rootIndexBuffer->drop();
 	if (m_distanceBuffer) m_distanceBuffer->drop();
 	if (m_internalAabbBuffer) m_internalAabbBuffer->drop();
+	if (m_refitParamBuffer) m_refitParamBuffer->drop();
+	if (m_dirtyStampBuffer) m_dirtyStampBuffer->drop();
+	if (m_dirtyNodeBuffer) m_dirtyNodeBuffer->drop();
+	if (m_dirtyNodeCountBuffer) m_dirtyNodeCountBuffer->drop();
+	if (m_dirtyCountParamBuffer) m_dirtyCountParamBuffer->drop();
 	if (m_pairParamBuffer) m_pairParamBuffer->drop();
 	if (m_leafRangeBuffer) m_leafRangeBuffer->drop();
 	if (m_pairBuffer) m_pairBuffer->drop();
@@ -66,6 +77,7 @@ b3IrrlichtLbvh::~b3IrrlichtLbvh()
 	if (m_smallIndexBuffer) m_smallIndexBuffer->drop();
 	if (m_largeIndexBuffer) m_largeIndexBuffer->drop();
 	if (m_largeAabbBuffer) m_largeAabbBuffer->drop();
+	if (m_leafIdentityBuffer) m_leafIdentityBuffer->drop();
 	delete m_sort;
 	delete m_dispatch;
 }
@@ -104,6 +116,14 @@ bool b3IrrlichtLbvh::init(irr::io::IFileSystem* fileSystem, bool doubleSingle)
 	m_internalMaterial = gpu->addComputeShaderFromFile(treePath, "CSBuildInternalNodes", irr::video::ECST_CS_5_0, 0);
 	m_distanceMaterial = gpu->addComputeShaderFromFile(treePath, "CSFindDistanceFromRoot", irr::video::ECST_CS_5_0, 0);
 	m_treeAabbMaterial = gpu->addComputeShaderFromFile(treePath, "CSBuildTreeAabbs", irr::video::ECST_CS_5_0, 0);
+
+	// Optional: a missing/broken refit shader just leaves every refit fitting the whole tree.
+	const irr::io::path refitPath = m_doubleSingle ? "media/shaders/B3LbvhRefitDS.hlsl" : "media/shaders/B3LbvhRefit.hlsl";
+	if (!fileSystem || fileSystem->existFile(refitPath))
+	{
+		m_markDirtyMaterial = gpu->addComputeShaderFromFile(refitPath, "CSMarkMovedLeafAncestors", irr::video::ECST_CS_5_0, 0);
+		m_refitDirtyMaterial = gpu->addComputeShaderFromFile(refitPath, "CSRefitDirtyAabbs", irr::video::ECST_CS_5_0, 0);
+	}
 
 	const irr::io::path pairPath = m_doubleSingle ? "media/shaders/B3LbvhPairsDS.hlsl" : "media/shaders/B3LbvhPairs.hlsl";
 	if (fileSystem && !fileSystem->existFile(pairPath))
@@ -164,6 +184,7 @@ bool b3IrrlichtLbvh::computeMergedAabb(const std::vector<b3IrrAabb>& aabbs, b3Ir
 	m_driver->setMaterial(mat);
 	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(1, m_aabbBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(4, ensureLeafIdentity((unsigned int)aabbs.size()), irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(0, m_mergedBuffer, irr::video::EHBT_COMPUTE);
 	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(1, 1, 1));
 	m_driver->unbindComputeResources();
@@ -188,6 +209,7 @@ bool b3IrrlichtLbvh::buildSortedMortonCodes(const std::vector<b3IrrAabb>& aabbs,
 	m_driver->setMaterial(mat);
 	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(1, m_aabbBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(4, ensureLeafIdentity((unsigned int)aabbs.size()), irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(0, m_mergedBuffer, irr::video::EHBT_COMPUTE);
 	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(1, 1, 1));
 	m_driver->unbindComputeResources();
@@ -201,6 +223,7 @@ bool b3IrrlichtLbvh::buildSortedMortonCodes(const std::vector<b3IrrAabb>& aabbs,
 	m_driver->setMaterial(mat);
 	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(1, m_aabbBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(4, ensureLeafIdentity((unsigned int)aabbs.size()), irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(2, m_mergedBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(1, m_mortonBuffer, irr::video::EHBT_COMPUTE);
 	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(groups, 1, 1));
@@ -230,13 +253,125 @@ struct TreeParams
 
 static_assert(sizeof(TreeParams) == 16, "TreeParams must match the HLSL struct stride");
 
+struct RefitParams
+{
+	unsigned int numLeafNodes;
+	unsigned int numInternalNodes;
+	int processedDistance;
+	unsigned int frameStamp;
+};
+
+static_assert(sizeof(RefitParams) == 16, "RefitParams must match the HLSL struct stride");
+
+/// DispatchHelper patches the dirty-node count into the first field of a 16-byte struct.
+struct DirtyCountParams
+{
+	unsigned int count;
+	unsigned int pad0;
+	unsigned int pad1;
+	unsigned int pad2;
+};
+
+static_assert(sizeof(DirtyCountParams) == 16, "DirtyCountParams must match the HLSL uint4 stride");
+
 using b3IrrGpu::dropBuffer;
 using b3IrrGpu::ensureBuffer;
 }  // namespace
 
+bool b3IrrlichtLbvh::isSparseRefitAvailable() const
+{
+	return m_markDirtyMaterial >= 0 && m_refitDirtyMaterial >= 0 && m_dispatch && m_dispatch->isAvailable();
+}
+
+bool b3IrrlichtLbvh::refitDirtySubtrees(irr::scene::IComputeBuffer* leafAabbs,
+										irr::scene::IComputeBuffer* sortedCodes, unsigned int numLeaf,
+										irr::scene::IComputeBuffer* sleepStates,
+										irr::scene::IComputeBuffer* leafToBody)
+{
+	if (!isSparseRefitAvailable() || !sleepStates || !leafToBody || numLeaf < 2)
+		return false;
+
+	const irr::u32 numInternal = numLeaf - 1;
+
+	// Stamps must start at a value no frame can match; ensureBuffer leaves a grown one undefined.
+	if (!m_dirtyStampBuffer || m_dirtyStampCapacity < numInternal)
+	{
+		const std::vector<unsigned int> zeros(numInternal, 0u);
+		b3IrrGpu::uploadBuffer<unsigned int>(m_dirtyStampBuffer, &zeros[0], numInternal);
+		if (!m_dirtyStampBuffer)
+			return false;
+		m_dirtyStampCapacity = numInternal;
+		m_refitFrameStamp = 0;
+	}
+
+	// Each node is appended at most once, so numInternal cannot overflow.
+	ensureBuffer<unsigned int>(m_dirtyNodeBuffer, numInternal, irr::video::EHBF_COMPUTE_APPEND);
+	ensureBuffer<unsigned int>(m_dirtyNodeCountBuffer, 4, irr::video::EHBF_DRAW_INDIRECT_ARGS);
+	ensureBuffer<RefitParams>(m_refitParamBuffer, 1);
+	ensureBuffer<DirtyCountParams>(m_dirtyCountParamBuffer, 1);
+	if (!m_dirtyNodeBuffer || !m_dirtyNodeCountBuffer || !m_refitParamBuffer || !m_dirtyCountParamBuffer)
+		return false;
+
+	if (++m_refitFrameStamp == 0)
+		m_refitFrameStamp = 1;
+
+	RefitParams rp;
+	rp.numLeafNodes = numLeaf;
+	rp.numInternalNodes = numInternal;
+	rp.processedDistance = 0;
+	rp.frameStamp = m_refitFrameStamp;
+	memcpy(m_refitParamBuffer->getBufferPointer(), &rp, sizeof(rp));
+	m_refitParamBuffer->setDirty();
+
+	irr::video::SMaterial mat;
+	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_markDirtyMaterial;
+	m_driver->setMaterial(mat);
+	m_driver->bindComputeBuffer(0, m_refitParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(1, sortedCodes, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(2, m_leafParentBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(3, m_internalParentBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(4, sleepStates, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(5, leafToBody, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(0, m_dirtyStampBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->bindComputeBuffer(1, m_dirtyNodeBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->resetStructureCount(m_dirtyNodeBuffer, 0);
+	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((numLeaf + 127) / 128, 1, 1));
+	m_driver->copyStructureCount(m_dirtyNodeCountBuffer, 0, m_dirtyNodeBuffer);
+	m_driver->unbindComputeResources();
+	m_driver->computeBarrier(m_dirtyNodeBuffer);
+
+	if (!m_dispatch->prepareIndirect(m_dirtyNodeCountBuffer, m_dirtyCountParamBuffer, 128, numInternal))
+		return false;
+	irr::scene::IComputeBuffer* args = m_dispatch->getArgsBuffer();
+
+	for (int d = m_cachedMaxDistance; d >= 0; --d)
+	{
+		rp.processedDistance = d;
+		memcpy(m_refitParamBuffer->getBufferPointer(), &rp, sizeof(rp));
+		m_refitParamBuffer->setDirty();
+
+		mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_refitDirtyMaterial;
+		m_driver->setMaterial(mat);
+		m_driver->bindComputeBuffer(0, m_refitParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(1, sortedCodes, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(6, m_dirtyCountParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(7, m_dirtyNodeBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(8, m_childNodeBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(9, m_distanceBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(10, leafAabbs, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(2, m_internalAabbBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->dispatchComputeShaderIndirect(args, 0);
+		m_driver->unbindComputeResources();
+	}
+
+	return true;
+}
+
 bool b3IrrlichtLbvh::buildTreeCore(irr::scene::IComputeBuffer* leafAabbs,
 								   irr::scene::IComputeBuffer* sortedCodes, unsigned int numLeaf,
-								   int& rootIndex, std::vector<int>* distanceOut)
+								   int& rootIndex, std::vector<int>* distanceOut, bool refitOnly,
+								   irr::scene::IComputeBuffer* refitSleepStates,
+								   irr::scene::IComputeBuffer* leafToBody)
 {
 	if (m_prefixMaterial < 0 || !leafAabbs || !sortedCodes || numLeaf < 2)
 		return false;
@@ -268,66 +403,81 @@ bool b3IrrlichtLbvh::buildTreeCore(irr::scene::IComputeBuffer* leafAabbs,
 	const irr::u32 leafGroups = (numLeaf + 127) / 128;
 	irr::video::SMaterial mat;
 
-	// 1) adjacent-pair common prefixes
-	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_prefixMaterial;
-	m_driver->setMaterial(mat);
-	m_driver->bindComputeBuffer(0, m_treeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(1, sortedCodes, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(0, m_commonPrefixBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->bindComputeBuffer(1, m_commonPrefixLenBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(internalGroups, 1, 1));
-	m_driver->unbindComputeResources();
-
-	// 2) leaves attach to their split
-	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_leafMaterial;
-	m_driver->setMaterial(mat);
-	m_driver->bindComputeBuffer(0, m_treeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(3, m_commonPrefixLenBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(2, m_childNodeBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->bindComputeBuffer(3, m_leafParentBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(leafGroups, 1, 1));
-	m_driver->unbindComputeResources();
-
-	// 3) internal node linking + root discovery
-	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_internalMaterial;
-	m_driver->setMaterial(mat);
-	m_driver->bindComputeBuffer(0, m_treeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(2, m_commonPrefixBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(3, m_commonPrefixLenBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(2, m_childNodeBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->bindComputeBuffer(4, m_internalParentBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->bindComputeBuffer(5, m_rootIndexBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(internalGroups, 1, 1));
-	m_driver->unbindComputeResources();
-
-	// 4) depth per internal node
-	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_distanceMaterial;
-	m_driver->setMaterial(mat);
-	m_driver->bindComputeBuffer(0, m_treeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(5, m_internalParentBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(6, m_distanceBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(internalGroups, 1, 1));
-	m_driver->unbindComputeResources();
-
-	// The depth range drives how many fitting passes are needed, so the bound has to reach the
-	// host: as the whole array when the caller wants it anyway, otherwise as a 4-byte reduction.
 	int maxDistance = 0;
-	if (distanceOut)
+
+	// Stages 1-4 build the TOPOLOGY. A refit keeps it and only re-fits AABBs below, which is
+	// correct for any leaf movement - bounds stay conservative - but degrades tree quality.
+	if (!refitOnly)
 	{
-		m_distanceBuffer->downloadFromGPU();
-		distanceOut->resize(numInternal);
-		memcpy(&(*distanceOut)[0], m_distanceBuffer->getBufferPointer(), numInternal * sizeof(int));
-		for (irr::u32 i = 0; i < numInternal; ++i)
-			if ((*distanceOut)[i] > maxDistance)
-				maxDistance = (*distanceOut)[i];
+		// 1) adjacent-pair common prefixes
+		mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_prefixMaterial;
+		m_driver->setMaterial(mat);
+		m_driver->bindComputeBuffer(0, m_treeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(1, sortedCodes, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(0, m_commonPrefixBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->bindComputeBuffer(1, m_commonPrefixLenBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(internalGroups, 1, 1));
+		m_driver->unbindComputeResources();
+
+		// 2) leaves attach to their split
+		mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_leafMaterial;
+		m_driver->setMaterial(mat);
+		m_driver->bindComputeBuffer(0, m_treeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(3, m_commonPrefixLenBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(2, m_childNodeBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->bindComputeBuffer(3, m_leafParentBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(leafGroups, 1, 1));
+		m_driver->unbindComputeResources();
+
+		// 3) internal node linking + root discovery
+		mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_internalMaterial;
+		m_driver->setMaterial(mat);
+		m_driver->bindComputeBuffer(0, m_treeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(2, m_commonPrefixBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(3, m_commonPrefixLenBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(2, m_childNodeBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->bindComputeBuffer(4, m_internalParentBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->bindComputeBuffer(5, m_rootIndexBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(internalGroups, 1, 1));
+		m_driver->unbindComputeResources();
+
+		// 4) depth per internal node
+		mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_distanceMaterial;
+		m_driver->setMaterial(mat);
+		m_driver->bindComputeBuffer(0, m_treeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(5, m_internalParentBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(6, m_distanceBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(internalGroups, 1, 1));
+		m_driver->unbindComputeResources();
+
+		// The depth range drives how many fitting passes are needed, so the bound has to reach the
+		// host: as the whole array when the caller wants it anyway, otherwise as a 4-byte reduction.
+		maxDistance = 0;
+		if (distanceOut)
+		{
+			m_distanceBuffer->downloadFromGPU();
+			distanceOut->resize(numInternal);
+			memcpy(&(*distanceOut)[0], m_distanceBuffer->getBufferPointer(), numInternal * sizeof(int));
+			for (irr::u32 i = 0; i < numInternal; ++i)
+				if ((*distanceOut)[i] > maxDistance)
+					maxDistance = (*distanceOut)[i];
+		}
+		else if (!m_dispatch || !m_dispatch->reduceMax(m_distanceBuffer, numInternal, maxDistance))
+		{
+			return false;
+		}
+
 	}
-	else if (!m_dispatch || !m_dispatch->reduceMax(m_distanceBuffer, numInternal, maxDistance))
+	else
 	{
-		return false;
+		maxDistance = m_cachedMaxDistance;
 	}
 
-	// 5) fit AABBs deepest-first so children are always ready before their parent.
-	for (int d = maxDistance; d >= 0; --d)
+	// 5) fit AABBs deepest-first so children are always ready before their parent. A refit can do
+	// this over the moved leaves' ancestors alone - every other node's bound is still exact.
+	const bool sparse = refitOnly && refitSleepStates &&
+						refitDirtySubtrees(leafAabbs, sortedCodes, numLeaf, refitSleepStates, leafToBody);
+	for (int d = sparse ? -1 : maxDistance; d >= 0; --d)
 	{
 		tp.processedDistance = d;
 		memcpy(m_treeParamBuffer->getBufferPointer(), &tp, sizeof(tp));
@@ -345,8 +495,16 @@ bool b3IrrlichtLbvh::buildTreeCore(irr::scene::IComputeBuffer* leafAabbs,
 		m_driver->unbindComputeResources();
 	}
 
+	if (refitOnly)
+	{
+		rootIndex = m_cachedRootIndex;
+		return true;
+	}
+
 	m_rootIndexBuffer->downloadFromGPU();
 	memcpy(&rootIndex, m_rootIndexBuffer->getBufferPointer(), sizeof(int));
+	m_cachedRootIndex = rootIndex;
+	m_cachedMaxDistance = maxDistance;
 	return true;
 }
 
@@ -399,9 +557,13 @@ struct PairParams
 	unsigned int numInternalNodes;
 	int rootIndex;
 	unsigned int numLargeAabbs;
+	unsigned int useSleepGate;
+	unsigned int pad0;
+	unsigned int pad1;
+	unsigned int pad2;
 };
 
-static_assert(sizeof(PairParams) == 16, "PairParams must match the HLSL struct stride");
+static_assert(sizeof(PairParams) == 32, "PairParams must match the HLSL struct stride");
 
 struct IrrInt2
 {
@@ -574,6 +736,7 @@ bool b3IrrlichtLbvh::calculateOverlappingPairs(const std::vector<b3IrrAabb>& aab
 	ensureBuffer<PairParams>(m_pairParamBuffer, 1);
 
 	PairParams pp;
+	memset(&pp, 0, sizeof(pp));
 	pp.numLeafNodes = numLeaf;
 	pp.numInternalNodes = numInternal;
 	pp.rootIndex = tree.rootIndex;
@@ -587,6 +750,7 @@ bool b3IrrlichtLbvh::calculateOverlappingPairs(const std::vector<b3IrrAabb>& aab
 	irr::video::SMaterial mat;
 
 	// 1) contiguous leaf range per internal node - what makes the duplicate-pair rejection work
+	m_cachedLeafRangeCount = 0;  // this path shares the buffer but not the resident tree
 	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_leafRangeMaterial;
 	m_driver->setMaterial(mat);
 	m_driver->bindComputeBuffer(0, m_pairParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
@@ -675,6 +839,23 @@ bool b3IrrlichtLbvh::isResidentPathAvailable() const
 	return m_dispatch && m_dispatch->isAvailable() && m_pairsMaterial >= 0 && m_mortonMaterial >= 0;
 }
 
+irr::scene::IComputeBuffer* b3IrrlichtLbvh::ensureLeafIdentity(unsigned int count)
+{
+	// Separate from m_smallIndexBuffer on purpose: the vector path pre-gathers its AABBs on the
+	// CPU, so its LeafToBody is identity even though its SmallToOriginal is a real map.
+	if (m_leafIdentityCount != count || !m_leafIdentityBuffer ||
+		m_leafIdentityBuffer->getStructureCount() < count)
+	{
+		ensureBuffer<unsigned int>(m_leafIdentityBuffer, count);
+		unsigned int* dst = (unsigned int*)m_leafIdentityBuffer->getBufferPointer();
+		for (unsigned int i = 0; i < count; ++i)
+			dst[i] = i;
+		m_leafIdentityBuffer->setDirty();
+		m_leafIdentityCount = count;
+	}
+	return m_leafIdentityBuffer;
+}
+
 bool b3IrrlichtLbvh::ensureIdentityIndexMap(unsigned int numAabbs)
 {
 	if (m_identityIndexCount == numAabbs && m_smallIndexBuffer &&
@@ -692,13 +873,29 @@ bool b3IrrlichtLbvh::ensureIdentityIndexMap(unsigned int numAabbs)
 }
 
 bool b3IrrlichtLbvh::calculateOverlappingPairsResident(irr::scene::IComputeBuffer* aabbs,
-													   unsigned int numAabbs, unsigned int maxPairs)
+													   unsigned int numAabbs, unsigned int maxPairs,
+													   irr::scene::IComputeBuffer* subset,
+													   unsigned int subsetCount, bool refit,
+													   irr::scene::IComputeBuffer* sleepStates,
+													   irr::scene::IComputeBuffer* refitSleepStates)
 {
-	if (!isResidentPathAvailable() || !aabbs || numAabbs < 2 || maxPairs == 0)
+	// A subset drives the tree through the SAME SmallToOriginal indirection identity uses, so the
+	// build/traverse kernels are untouched - only which bodies become leaves changes.
+	const unsigned int leafCount = subset ? subsetCount : numAabbs;
+	if (!isResidentPathAvailable() || !aabbs || leafCount < 2 || maxPairs == 0)
 		return false;
 
-	if (!ensureIdentityIndexMap(numAabbs))
-		return false;
+	// Never assigned into m_smallIndexBuffer: that one is owned and dropped by the destructor, and
+	// a caller's buffer aliased into it would be double-freed.
+	irr::scene::IComputeBuffer* indexMap = subset;
+	if (!indexMap)
+	{
+		if (!ensureIdentityIndexMap(numAabbs))
+			return false;
+		indexMap = m_smallIndexBuffer;
+	}
+
+	numAabbs = leafCount;
 
 	ensureBuffer<b3IrrAabb>(m_mergedBuffer, 1);
 	ensureBuffer<b3IrrSortData>(m_mortonBuffer, numAabbs);
@@ -710,34 +907,47 @@ bool b3IrrlichtLbvh::calculateOverlappingPairsResident(irr::scene::IComputeBuffe
 	memcpy(m_paramBuffer->getBufferPointer(), &params, sizeof(params));
 	m_paramBuffer->setDirty();
 
+	// A refit is only valid while the leaf SET is unchanged - the cached sort maps leaf slot to
+	// body, so a different body count means that mapping no longer describes this scene.
+	const bool canRefit = refit && m_cachedSortedCodes && m_cachedLeafCount == numAabbs;
+
 	irr::video::SMaterial mat;
-	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_mergeMaterial;
-	m_driver->setMaterial(mat);
-	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(1, aabbs, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(0, m_mergedBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(1, 1, 1));
-	m_driver->unbindComputeResources();
+	irr::scene::IComputeBuffer* sortedCodes = m_cachedSortedCodes;
+	if (!canRefit)
+	{
+		mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_mergeMaterial;
+		m_driver->setMaterial(mat);
+		m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(1, aabbs, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(4, indexMap, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(0, m_mergedBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(1, 1, 1));
+		m_driver->unbindComputeResources();
 
-	// Written as a UAV above, read as an SRV below.
-	m_driver->computeBarrier(m_mergedBuffer);
+		// Written as a UAV above, read as an SRV below.
+		m_driver->computeBarrier(m_mergedBuffer);
 
-	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_mortonMaterial;
-	m_driver->setMaterial(mat);
-	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(1, aabbs, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(2, m_mergedBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(1, m_mortonBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((numAabbs + 127) / 128, 1, 1));
-	m_driver->unbindComputeResources();
-	m_driver->computeBarrier(m_mortonBuffer);
+		mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_mortonMaterial;
+		m_driver->setMaterial(mat);
+		m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(1, aabbs, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(2, m_mergedBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(4, indexMap, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(1, m_mortonBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((numAabbs + 127) / 128, 1, 1));
+		m_driver->unbindComputeResources();
+		m_driver->computeBarrier(m_mortonBuffer);
 
-	irr::scene::IComputeBuffer* sortedCodes = 0;
-	if (!m_sort->executeResident(m_mortonBuffer, numAabbs, MORTON_BITS, &sortedCodes))
-		return false;
+		if (!m_sort->executeResident(m_mortonBuffer, numAabbs, MORTON_BITS, &sortedCodes))
+			return false;
+
+		m_cachedSortedCodes = sortedCodes;
+		m_cachedLeafCount = numAabbs;
+	}
+
 
 	int rootIndex = 0;
-	if (!buildTreeCore(aabbs, sortedCodes, numAabbs, rootIndex, 0))
+	if (!buildTreeCore(aabbs, sortedCodes, numAabbs, rootIndex, 0, canRefit, refitSleepStates, indexMap))
 		return false;
 
 	const irr::u32 numLeaf = numAabbs;
@@ -750,20 +960,31 @@ bool b3IrrlichtLbvh::calculateOverlappingPairsResident(irr::scene::IComputeBuffe
 
 	// No large side list: classifying by extent needs the AABBs on the CPU.
 	PairParams pp;
+	memset(&pp, 0, sizeof(pp));
 	pp.numLeafNodes = numLeaf;
 	pp.numInternalNodes = numInternal;
 	pp.rootIndex = rootIndex;
 	pp.numLargeAabbs = 0;
+	pp.useSleepGate = sleepStates ? 1u : 0u;
 	memcpy(m_pairParamBuffer->getBufferPointer(), &pp, sizeof(pp));
 	m_pairParamBuffer->setDirty();
 
-	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_leafRangeMaterial;
-	m_driver->setMaterial(mat);
-	m_driver->bindComputeBuffer(0, m_pairParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(1, m_childNodeBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(1, m_leafRangeBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((numInternal + 127) / 128, 1, 1));
-	m_driver->unbindComputeResources();
+	// Two ways to skip a per-internal-node descent to the leftmost/rightmost leaf: the gated query
+	// never reads the ranges at all, and otherwise they only change when the topology does.
+	const bool rangesNeeded = !m_leafRangeCaching || sleepStates == 0;
+	if (!rangesNeeded)
+		m_cachedLeafRangeCount = 0;
+	else if (!m_leafRangeCaching || !canRefit || m_cachedLeafRangeCount != numInternal)
+	{
+		mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_leafRangeMaterial;
+		m_driver->setMaterial(mat);
+		m_driver->bindComputeBuffer(0, m_pairParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(1, m_childNodeBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(1, m_leafRangeBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((numInternal + 127) / 128, 1, 1));
+		m_driver->unbindComputeResources();
+		m_cachedLeafRangeCount = numInternal;
+	}
 
 	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_pairsMaterial;
 	m_driver->setMaterial(mat);
@@ -773,7 +994,9 @@ bool b3IrrlichtLbvh::calculateOverlappingPairsResident(irr::scene::IComputeBuffe
 	m_driver->bindComputeBuffer(3, aabbs, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(4, m_internalAabbBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(5, m_leafRangeBuffer, irr::video::EHBT_SHADER_RESOURCE);
-	m_driver->bindComputeBuffer(7, m_smallIndexBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(7, indexMap, irr::video::EHBT_SHADER_RESOURCE);
+	if (sleepStates)
+		m_driver->bindComputeBuffer(10, sleepStates, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(0, m_pairBuffer, irr::video::EHBT_COMPUTE);
 	m_driver->resetStructureCount(m_pairBuffer, 0);
 	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((numLeaf + 127) / 128, 1, 1));
@@ -833,6 +1056,7 @@ bool b3IrrlichtLbvh::castRays(const std::vector<b3IrrAabb>& aabbs, const std::ve
 	// numLeafNodes doubles as the ray count for this kernel - the traversal never needs the
 	// leaf count, since it walks from the root.
 	PairParams pp;
+	memset(&pp, 0, sizeof(pp));
 	pp.numLeafNodes = (unsigned int)rays.size();
 	pp.numInternalNodes = (unsigned int)m_smallAabbs.size() - 1;
 	pp.rootIndex = tree.rootIndex;

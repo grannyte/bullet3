@@ -44,7 +44,7 @@ template <typename T>
 //template <class T>
 class btAlignedObjectArray
 {
-	btAlignedAllocator<T, 16> m_allocator;
+	btAlignedAllocator<T, BT_DEFAULT_ALIGNMENT> m_allocator;
 
 	int m_size;
 	int m_capacity;

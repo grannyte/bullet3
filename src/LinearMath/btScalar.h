@@ -142,7 +142,9 @@ inline int btIsDoublePrecision()
 			#endif
 
 			//#define BT_USE_SSE_IN_API
-			#define BT_USE_AVX
+			//AVX disabled: this reverts btVector3/btQuaternion/btDbvt/btSolverBody and the
+			//constraint row solvers to the scalar paths upstream compiles for double precision.
+			//#define BT_USE_AVX
 			#ifdef BT_USE_AVX
 
 #if (_MSC_FULL_VER >= 170050727)//Visual Studio 2012 can compile SSE4/FMA3 (but SSE4/FMA3 is not enabled by default)
@@ -525,12 +527,19 @@ inline int btIsDoublePrecision()
 		(float32x4_t) { r0, r1, r2, r3 }
 #endif//BT_USE_NEON
 
-#define BT_DECLARE_ALIGNED_ALLOCATOR()                                                                     \
-	SIMD_FORCE_INLINE void *operator new(size_t sizeInBytes) { return btAlignedAlloc(sizeInBytes, 16); }   \
-	SIMD_FORCE_INLINE void operator delete(void *ptr) { btAlignedFree(ptr); }                              \
-	SIMD_FORCE_INLINE void *operator new(size_t, void *ptr) { return ptr; }                                \
-	SIMD_FORCE_INLINE void operator delete(void *, void *) {}                                              \
-	SIMD_FORCE_INLINE void *operator new[](size_t sizeInBytes) { return btAlignedAlloc(sizeInBytes, 16); } \
+//must match ATTRIBUTE_ALIGNED_DEFAULT: AVX widens btVector3 to 32 bytes
+#ifdef BT_USE_AVX
+#define BT_DEFAULT_ALIGNMENT 32
+#else
+#define BT_DEFAULT_ALIGNMENT 16
+#endif
+
+#define BT_DECLARE_ALIGNED_ALLOCATOR()                                                                                      \
+	SIMD_FORCE_INLINE void *operator new(size_t sizeInBytes) { return btAlignedAlloc(sizeInBytes, BT_DEFAULT_ALIGNMENT); }   \
+	SIMD_FORCE_INLINE void operator delete(void *ptr) { btAlignedFree(ptr); }                                               \
+	SIMD_FORCE_INLINE void *operator new(size_t, void *ptr) { return ptr; }                                                 \
+	SIMD_FORCE_INLINE void operator delete(void *, void *) {}                                                               \
+	SIMD_FORCE_INLINE void *operator new[](size_t sizeInBytes) { return btAlignedAlloc(sizeInBytes, BT_DEFAULT_ALIGNMENT); } \
 	SIMD_FORCE_INLINE void operator delete[](void *ptr) { btAlignedFree(ptr); }                            \
 	SIMD_FORCE_INLINE void *operator new[](size_t, void *ptr) { return ptr; }                              \
 	SIMD_FORCE_INLINE void operator delete[](void *, void *) {}

@@ -30,9 +30,12 @@ using b3IrrGpu::ensureBuffer;
 
 b3IrrlichtSolver::b3IrrlichtSolver(irr::video::IVideoDriver* driver)
 	: m_driver(driver), m_doubleSingle(false), m_solveMaterial(-1), m_applyMaterial(-1), m_clearImpulseMaterial(-1),
-	  m_clearLoadMaterial(-1), m_accumLoadMaterial(-1), m_dispatch(0), m_paramBuffer(0),
-	  m_bodyBuffer(0), m_contactBuffer(0), m_inertiaBuffer(0), m_deltaBuffer(0),
-	  m_impulseBuffer(0), m_loadBuffer(0), m_impulseFloats(0)
+	  m_clearLoadMaterial(-1), m_accumLoadMaterial(-1), m_buildActiveMaterial(-1),
+	  m_applyActiveMaterial(-1), m_clearLoadActiveMaterial(-1), m_dispatch(0), m_activeDispatch(0),
+	  m_paramBuffer(0), m_bodyBuffer(0), m_contactBuffer(0), m_inertiaBuffer(0), m_deltaBuffer(0),
+	  m_impulseBuffer(0), m_loadBuffer(0), m_activeParamBuffer(0), m_activeBodyBuffer(0),
+	  m_activeCountBuffer(0), m_claimBuffer(0), m_impulseFloats(0), m_activeGating(true),
+	  m_activeStamp(0)
 {
 }
 
@@ -40,7 +43,9 @@ b3IrrlichtSolver::~b3IrrlichtSolver()
 {
 	releaseBuffers();
 	dropBuffer(m_paramBuffer);
+	dropBuffer(m_activeParamBuffer);
 	delete m_dispatch;
+	delete m_activeDispatch;
 }
 
 void b3IrrlichtSolver::releaseBuffers()
@@ -51,7 +56,11 @@ void b3IrrlichtSolver::releaseBuffers()
 	dropBuffer(m_deltaBuffer);
 	dropBuffer(m_impulseBuffer);
 	dropBuffer(m_loadBuffer);
+	dropBuffer(m_activeBodyBuffer);
+	dropBuffer(m_activeCountBuffer);
+	dropBuffer(m_claimBuffer);
 	m_impulseFloats = 0;
+	m_activeStamp = 0;
 }
 
 bool b3IrrlichtSolver::init(irr::io::IFileSystem* fileSystem, bool doubleSingle)
@@ -77,12 +86,24 @@ bool b3IrrlichtSolver::init(irr::io::IFileSystem* fileSystem, bool doubleSingle)
 	m_clearImpulseMaterial = gpu->addComputeShaderFromFile(path, "CSClearAccumImpulse", irr::video::ECST_CS_5_0, 0);
 	m_clearLoadMaterial = gpu->addComputeShaderFromFile(path, "CSClearBodyPointCounts", irr::video::ECST_CS_5_0, 0);
 	m_accumLoadMaterial = gpu->addComputeShaderFromFile(path, "CSAccumBodyPointCounts", irr::video::ECST_CS_5_0, 0);
+	m_buildActiveMaterial = gpu->addComputeShaderFromFile(path, "CSBuildActiveBodies", irr::video::ECST_CS_5_0, 0);
+	m_applyActiveMaterial = gpu->addComputeShaderFromFile(path, "CSApplyVelocityDeltasActive", irr::video::ECST_CS_5_0, 0);
+	m_clearLoadActiveMaterial = gpu->addComputeShaderFromFile(path, "CSClearBodyPointCountsActive", irr::video::ECST_CS_5_0, 0);
 
 	if (!m_dispatch)
 		m_dispatch = new b3IrrGpu::DispatchHelper(m_driver);
 	m_dispatch->init(fileSystem);
+	if (!m_activeDispatch)
+		m_activeDispatch = new b3IrrGpu::DispatchHelper(m_driver);
+	m_activeDispatch->init(fileSystem);
 
 	return m_solveMaterial >= 0 && m_applyMaterial >= 0;
+}
+
+bool b3IrrlichtSolver::isActiveBodyGatingAvailable() const
+{
+	return m_buildActiveMaterial >= 0 && m_applyActiveMaterial >= 0 &&
+		   m_clearLoadActiveMaterial >= 0 && m_activeDispatch && m_activeDispatch->isAvailable();
 }
 
 bool b3IrrlichtSolver::isResidentPathAvailable() const
@@ -228,7 +249,8 @@ bool b3IrrlichtSolver::solveContactsResident(irr::scene::IComputeBuffer* bodies,
 											 irr::scene::IComputeBuffer* contacts,
 											 irr::scene::IComputeBuffer* contactCount,
 											 unsigned int maxContacts, int iterations,
-											 float deltaTime, float erp)
+											 float deltaTime, float erp,
+											 irr::scene::IComputeBuffer* sleepState)
 {
 	if (!isResidentPathAvailable() || !bodies || !contacts || !contactCount || numBodies == 0 ||
 		maxContacts == 0)
@@ -266,11 +288,23 @@ bool b3IrrlichtSolver::solveContactsResident(irr::scene::IComputeBuffer* bodies,
 	m_driver->dispatchComputeShaderIndirect(args, 0);
 	m_driver->unbindComputeResources();
 
-	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_clearLoadMaterial;
+	const bool gated = m_activeGating && isActiveBodyGatingAvailable() &&
+					   buildActiveBodyList(numBodies, contacts, args);
+	irr::scene::IComputeBuffer* activeArgs = gated ? m_activeDispatch->getArgsBuffer() : 0;
+
+	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)(gated ? m_clearLoadActiveMaterial
+														   : m_clearLoadMaterial);
 	m_driver->setMaterial(mat);
 	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(3, m_loadBuffer, irr::video::EHBT_COMPUTE);
-	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(bodyGroups, 1, 1));
+	if (gated)
+	{
+		m_driver->bindComputeBuffer(5, m_activeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(6, m_activeBodyBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->dispatchComputeShaderIndirect(activeArgs, 0);
+	}
+	else
+		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(bodyGroups, 1, 1));
 	m_driver->unbindComputeResources();
 
 	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_accumLoadMaterial;
@@ -290,24 +324,78 @@ bool b3IrrlichtSolver::solveContactsResident(irr::scene::IComputeBuffer* bodies,
 		m_driver->bindComputeBuffer(1, contacts, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(2, m_inertiaBuffer, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(3, m_loadBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		if (sleepState)
+			m_driver->bindComputeBuffer(4, sleepState, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(0, bodies, irr::video::EHBT_COMPUTE);
 		m_driver->bindComputeBuffer(1, m_deltaBuffer, irr::video::EHBT_COMPUTE);
 		m_driver->bindComputeBuffer(2, m_impulseBuffer, irr::video::EHBT_COMPUTE);
 		m_driver->dispatchComputeShaderIndirect(args, 0);
 		m_driver->unbindComputeResources();
 
-		mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_applyMaterial;
+		mat.MaterialType = (irr::video::E_MATERIAL_TYPE)(gated ? m_applyActiveMaterial
+															  : m_applyMaterial);
 		m_driver->setMaterial(mat);
 		m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(1, contacts, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(2, m_inertiaBuffer, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(0, bodies, irr::video::EHBT_COMPUTE);
 		m_driver->bindComputeBuffer(1, m_deltaBuffer, irr::video::EHBT_COMPUTE);
-		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(bodyGroups, 1, 1));
+		if (gated)
+		{
+			m_driver->bindComputeBuffer(5, m_activeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+			m_driver->bindComputeBuffer(6, m_activeBodyBuffer, irr::video::EHBT_SHADER_RESOURCE);
+			m_driver->dispatchComputeShaderIndirect(activeArgs, 0);
+		}
+		else
+			m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(bodyGroups, 1, 1));
 		m_driver->unbindComputeResources();
 	}
 
 	return true;
+}
+
+bool b3IrrlichtSolver::buildActiveBodyList(unsigned int numBodies,
+										  irr::scene::IComputeBuffer* contacts,
+										  irr::scene::IComputeBuffer* contactArgs)
+{
+	// A fresh claim buffer reads 0 everywhere, so the stamp sequence has to restart with it.
+	irr::scene::IComputeBuffer* previousClaim = m_claimBuffer;
+	ensureBuffer<unsigned int>(m_claimBuffer, numBodies);
+	if (m_claimBuffer != previousClaim)
+		m_activeStamp = 0;
+	if (++m_activeStamp == 0u)
+		m_activeStamp = 1u;
+
+	ensureBuffer<unsigned int>(m_activeBodyBuffer, numBodies, irr::video::EHBF_COMPUTE_APPEND);
+	ensureBuffer<unsigned int>(m_activeCountBuffer, 4, irr::video::EHBF_DRAW_INDIRECT_ARGS);
+	if (!m_claimBuffer || !m_activeBodyBuffer || !m_activeCountBuffer)
+		return false;
+
+	b3IrrGpu::CountParams ap;
+	ap.count = 0;
+	ap.cap = m_activeStamp;
+	ap.reduceCount = 0;
+	ap.numBodies = numBodies;
+	b3IrrGpu::uploadBuffer<b3IrrGpu::CountParams>(m_activeParamBuffer, &ap, 1);
+	if (!m_activeParamBuffer)
+		return false;
+
+	irr::video::SMaterial mat;
+	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_buildActiveMaterial;
+	m_driver->setMaterial(mat);
+	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(1, contacts, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(5, m_activeParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(4, m_activeBodyBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->bindComputeBuffer(5, m_claimBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->resetStructureCount(m_activeBodyBuffer, 0);
+	m_driver->dispatchComputeShaderIndirect(contactArgs, 0);
+	m_driver->copyStructureCount(m_activeCountBuffer, 0, m_activeBodyBuffer);
+	m_driver->unbindComputeResources();
+	m_driver->computeBarrier(m_activeBodyBuffer);
+
+	// Patches ActiveParams.x only, so the stamp uploaded above survives into the build next step.
+	return m_activeDispatch->prepareIndirect(m_activeCountBuffer, m_activeParamBuffer, 64, numBodies);
 }
 
 bool b3IrrlichtSolver::downloadAccumulatedImpulses(std::vector<float>& out)

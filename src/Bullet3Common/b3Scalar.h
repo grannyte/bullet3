@@ -95,7 +95,10 @@ inline int b3GetVersion()
 
 #if (defined (_WIN32) && (_MSC_VER) && _MSC_VER >= 1400) && (defined (B3_USE_DOUBLE_PRECISION))
 	#if (defined (_M_IX86) || defined (_M_X64))
-			#define B3_USE_AVX
+			//AVX disabled to match BT_USE_AVX in btScalar.h. Also removes a layout split: only
+			//GameServer/Galaxy Server define B3_USE_DOUBLE_PRECISION, so b3Vector3 was a 32-byte
+			//__m256d union there and a plain b3Scalar[4] in OuterSpaceLib, across a DLL boundary.
+			//#define B3_USE_AVX
 			#ifdef B3_USE_AVX
 			//B3_USE_SSE_IN_API is disabled under Windows by default, because 
 			//it makes it harder to integrate Bullet into your application under Windows 

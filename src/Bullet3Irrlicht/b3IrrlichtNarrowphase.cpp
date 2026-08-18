@@ -13,7 +13,7 @@ struct AabbParams
 {
 	unsigned int numBodies;
 	float margin;
-	unsigned int pad0;
+	unsigned int useSleep;
 	unsigned int pad1;
 };
 
@@ -432,7 +432,9 @@ bool b3IrrlichtNarrowphase::computeWorldAabbs(const std::vector<b3RigidBodyData>
 	AabbParams p;
 	p.numBodies = (unsigned int)bodies.size();
 	p.margin = margin;
-	p.pad0 = p.pad1 = 0;
+	// The vector path has no sleep state, so every body is recomputed.
+	p.useSleep = 0;
+	p.pad1 = 0;
 	memcpy(m_aabbParamBuffer->getBufferPointer(), &p, sizeof(p));
 	m_aabbParamBuffer->setDirty();
 
@@ -455,11 +457,14 @@ bool b3IrrlichtNarrowphase::computeWorldAabbs(const std::vector<b3RigidBodyData>
 }
 
 bool b3IrrlichtNarrowphase::computeWorldAabbsResident(irr::scene::IComputeBuffer* bodies,
-													  unsigned int numBodies, float margin)
+													  unsigned int numBodies, float margin,
+													  irr::scene::IComputeBuffer* sleepState)
 {
 	if (m_aabbMaterial < 0 || !bodies || numBodies == 0 || !m_collidableBuffer)
 		return false;
 
+	// A grown buffer's new entries are undefined, so the skip below would leave them that way.
+	const bool grew = !m_worldAabbBuffer || m_worldAabbBuffer->getStructureCount() < numBodies;
 	if (m_doubleSingle)
 		ensureBuffer<b3IrrAabbDS>(m_worldAabbBuffer, numBodies);
 	else
@@ -469,7 +474,8 @@ bool b3IrrlichtNarrowphase::computeWorldAabbsResident(irr::scene::IComputeBuffer
 	AabbParams p;
 	p.numBodies = numBodies;
 	p.margin = margin;
-	p.pad0 = p.pad1 = 0;
+	p.useSleep = (sleepState && !grew) ? 1u : 0u;
+	p.pad1 = 0;
 	memcpy(m_aabbParamBuffer->getBufferPointer(), &p, sizeof(p));
 	m_aabbParamBuffer->setDirty();
 
@@ -480,6 +486,8 @@ bool b3IrrlichtNarrowphase::computeWorldAabbsResident(irr::scene::IComputeBuffer
 	m_driver->bindComputeBuffer(1, bodies, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(2, m_collidableBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(3, m_localAabbBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	if (p.useSleep)
+		m_driver->bindComputeBuffer(4, sleepState, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(0, m_worldAabbBuffer, irr::video::EHBT_COMPUTE);
 	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((numBodies + 63) / 64, 1, 1));
 	m_driver->unbindComputeResources();

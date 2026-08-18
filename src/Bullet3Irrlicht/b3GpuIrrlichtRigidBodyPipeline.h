@@ -75,20 +75,23 @@ public:
 	 * @param bodies Device-resident bodies, updated in place.
 	 * @param numBodies Bodies in that buffer.
 	 * @param deltaTime Timestep.
+	 * @param sleepState Per-body sleep state from b3IrrlichtSleep; a sleeping body skips
+	 *        integration but still publishes its transform. 0 reads as all-awake.
 	 * @return False if the fused kernel is unavailable.
 	 */
 	bool integrateAndPackResident(irr::scene::IComputeBuffer* bodies, unsigned int numBodies,
-								  float deltaTime);
+								  float deltaTime, irr::scene::IComputeBuffer* sleepState = 0);
 
 	/**
 	 * @brief Integrates a caller-owned body buffer without producing renderer output.
 	 * @param bodies Device-resident bodies, updated in place.
 	 * @param numBodies Bodies in that buffer.
 	 * @param deltaTime Timestep.
+	 * @param sleepState Per-body sleep state; sleeping bodies are skipped. 0 reads as all-awake.
 	 * @return False if the kernel is unavailable.
 	 */
 	bool integrateResident(irr::scene::IComputeBuffer* bodies, unsigned int numBodies,
-						   float deltaTime);
+						   float deltaTime, irr::scene::IComputeBuffer* sleepState = 0);
 
 	/**
 	 * @brief The one readback a step still owes the renderer: 28 bytes per body, not 80.
@@ -110,6 +113,12 @@ public:
 	/// Packed transforms from the last integrateAndPackResident call.
 	irr::scene::IComputeBuffer* getTransformBuffer() const { return m_transformBuffer; }
 
+	/// The 28-byte transforms a renderer's cull pass reads; df64 emits them next to its hi/lo pair.
+	irr::scene::IComputeBuffer* getRenderTransformBuffer() const
+	{
+		return m_doubleSingle ? m_renderTransformBuffer : m_transformBuffer;
+	}
+
 	/// The pipeline's own body buffer, so a resident chain can share it.
 	irr::scene::IComputeBuffer* getBodyBuffer() const { return m_bodyBuffer; }
 
@@ -127,16 +136,19 @@ private:
 	 * @param numBodies Bodies in that buffer.
 	 * @param deltaTime Timestep.
 	 * @param packTransforms Whether to also bind and fill the renderer's transform buffer.
+	 * @param sleepState Per-body sleep state, or 0.
 	 * @return False if the kernel is unavailable or an argument is missing.
 	 */
 	bool dispatchIntegrate(int material, irr::scene::IComputeBuffer* bodies, unsigned int numBodies,
-						   float deltaTime, bool packTransforms);
+						   float deltaTime, bool packTransforms,
+						   irr::scene::IComputeBuffer* sleepState);
 
 	irr::video::IVideoDriver* m_driver;
 	bool m_doubleSingle;
 	irr::scene::IComputeBuffer* m_bodyBuffer;
 	irr::scene::IComputeBuffer* m_paramBuffer;
 	irr::scene::IComputeBuffer* m_transformBuffer;
+	irr::scene::IComputeBuffer* m_renderTransformBuffer;
 	int m_integrateMaterial;
 	int m_integratePackMaterial;
 

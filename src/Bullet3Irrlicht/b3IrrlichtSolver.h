@@ -105,13 +105,29 @@ public:
 	 * @param iterations Sequential-impulse passes; never fewer than 1.
 	 * @param deltaTime Timestep the impulses are scaled against.
 	 * @param erp Baumgarte position-correction factor in [0,1].
+	 * @param sleepState Per-body sleep state from b3IrrlichtSleep; a contact whose BOTH bodies are
+	 *        asleep is skipped. 0 leaves the binding empty, which reads as all-awake.
 	 * @return False if the kernels are unavailable or an argument is missing.
 	 */
 	bool solveContactsResident(irr::scene::IComputeBuffer* bodies, unsigned int numBodies,
 							   irr::scene::IComputeBuffer* contacts,
 							   irr::scene::IComputeBuffer* contactCount,
 							   unsigned int maxContacts, int iterations = 4,
-							   float deltaTime = 1.f / 60.f, float erp = 0.2f);
+							   float deltaTime = 1.f / 60.f, float erp = 0.2f,
+							   irr::scene::IComputeBuffer* sleepState = 0);
+
+	/**
+	 * @brief Runs the resident solve's per-body passes over the contacted bodies only.
+	 *
+	 * Only a body named by a contact can receive a velocity delta, so the rest fold in a zero -
+	 * skipping them is bit-identical, and takes the pass off the total body count.
+	 *
+	 * @param enabled False restores the whole-world dispatches.
+	 */
+	void setActiveBodyGating(bool enabled) { m_activeGating = enabled; }
+
+	/// Whether the active-body kernels compiled; gating silently falls back to the full pass if not.
+	bool isActiveBodyGatingAvailable() const;
 
 	/**
 	 * @brief Reads back the accumulated-impulse ledger left by the last solveContacts call.
@@ -127,6 +143,16 @@ private:
 
 	void releaseBuffers();
 
+	/**
+	 * @brief Appends every body named by this step's contacts, deduplicated, and sizes its dispatch.
+	 * @param numBodies Bodies in the world; indices past it are dropped.
+	 * @param contacts Contact buffer the solve will run over.
+	 * @param contactArgs Indirect args covering that contact count.
+	 * @return False if a buffer could not be sized; the caller then stays on the full-world pass.
+	 */
+	bool buildActiveBodyList(unsigned int numBodies, irr::scene::IComputeBuffer* contacts,
+							 irr::scene::IComputeBuffer* contactArgs);
+
 	irr::video::IVideoDriver* m_driver;
 	bool m_doubleSingle;
 
@@ -135,8 +161,14 @@ private:
 	int m_clearImpulseMaterial;
 	int m_clearLoadMaterial;
 	int m_accumLoadMaterial;
+	int m_buildActiveMaterial;
+	int m_applyActiveMaterial;
+	int m_clearLoadActiveMaterial;
 
 	b3IrrGpu::DispatchHelper* m_dispatch;
+	/// Its own helper: the active-body args are consumed interleaved with the contact ones, which
+	/// a single helper's one args buffer cannot hold at the same time.
+	b3IrrGpu::DispatchHelper* m_activeDispatch;
 
 	irr::scene::IComputeBuffer* m_paramBuffer;
 	irr::scene::IComputeBuffer* m_bodyBuffer;
@@ -145,7 +177,14 @@ private:
 	irr::scene::IComputeBuffer* m_deltaBuffer;
 	irr::scene::IComputeBuffer* m_impulseBuffer;
 	irr::scene::IComputeBuffer* m_loadBuffer;
+	irr::scene::IComputeBuffer* m_activeParamBuffer;
+	irr::scene::IComputeBuffer* m_activeBodyBuffer;
+	irr::scene::IComputeBuffer* m_activeCountBuffer;
+	irr::scene::IComputeBuffer* m_claimBuffer;
 	unsigned int m_impulseFloats;
+	bool m_activeGating;
+	/// Never 0: that is what a freshly created claim buffer already reads, so it can never match.
+	unsigned int m_activeStamp;
 };
 
 #endif  //B3_IRRLICHT_SOLVER_H

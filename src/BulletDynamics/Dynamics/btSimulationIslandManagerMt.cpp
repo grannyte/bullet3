@@ -171,7 +171,11 @@ void btSimulationIslandManagerMt::initIslandPools()
 
 btSimulationIslandManagerMt::Island* btSimulationIslandManagerMt::getIsland(int id)
 {
-	btAssert(id >= 0);
+	// id < 0 is routine, not an error: getIslandId returns -1 for a manifold whose bodies are both
+	// static/kinematic. Only the upper bound was checked, so that indexed [-1] and handed back the
+	// allocator header as a live Island*, which callers then wrote through.
+	if (id < 0)
+		return nullptr;
 	btAssert(id < m_lookupIslandFromId.size());
 	if (id >= m_lookupIslandFromId.size())
 	{

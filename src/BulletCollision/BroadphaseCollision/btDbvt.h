@@ -773,7 +773,9 @@ DBVT_INLINE int Select(const btDbvtAabbMm& o,
 	__m256d doa_abs = _mm256_and_pd(doa, btvAbsfMask);
 	__m256d dob_abs = _mm256_and_pd(dob, btvAbsfMask);
 
-	return (hsum_double_avx(doa_abs) < hsum_double_avx(dob_abs) ? 0 : 1);
+	//mask w out so this matches the generic Proximity it stands in for
+	return (hsum_double_avx(_mm256_and_pd(doa_abs, btvFFF0fMask)) <
+			hsum_double_avx(_mm256_and_pd(dob_abs, btvFFF0fMask)) ? 0 : 1);
 #else
 	return (Proximity(o, a) < Proximity(o, b) ? 0 : 1);
 #endif

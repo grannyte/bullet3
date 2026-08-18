@@ -130,10 +130,34 @@ public:
 	 * @param aabbs Device-resident world AABBs, one per body.
 	 * @param numAabbs AABBs in that buffer; at least 2.
 	 * @param maxPairs Append capacity; the count is clamped to it downstream.
+	 * @param subset Optional body-index list to build the tree over instead of all of them.
+	 * @param subsetCount Entries in subset; ignored when subset is null.
 	 * @return False if the kernels are unavailable or the tree could not be built.
+	 *
+	 * @param refit Reuse the previous topology and only re-fit AABBs. Conservative, so no pair can
+	 *        be missed, but quality decays as bodies drift; ignored if the leaf count changed.
+	 * @param sleepStates Optional per-body sleep bits; when given, sleeping leaves stop querying and
+	 *        the slot-order dedup yields to them. Drops both-asleep pairs, which the pipeline
+	 *        discards before narrowphase anyway.
+	 * @param refitSleepStates Same bits, used instead to re-fit only the root-paths of leaves that
+	 *        moved. Must be the buffer that gated this step's world-AABB update, or bounds go stale.
 	 */
 	bool calculateOverlappingPairsResident(irr::scene::IComputeBuffer* aabbs, unsigned int numAabbs,
-										   unsigned int maxPairs = 65536);
+										   unsigned int maxPairs = 65536,
+										   irr::scene::IComputeBuffer* subset = 0,
+										   unsigned int subsetCount = 0, bool refit = false,
+										   irr::scene::IComputeBuffer* sleepStates = 0,
+										   irr::scene::IComputeBuffer* refitSleepStates = 0);
+
+	/// Whether the sparse-refit kernels compiled; without them a refit falls back to the full fit.
+	bool isSparseRefitAvailable() const;
+
+	/// Deepest internal node of the last full build - the AABB fit costs one dispatch per level.
+	int getLastMaxDistance() const { return m_cachedMaxDistance; }
+
+	/// Reuse of the per-internal-node leaf ranges across refits, and skipping them entirely when
+	/// the sleep-gated query cannot read them. Off restores a rebuild of them every step.
+	void setLeafRangeCaching(bool enable) { m_leafRangeCaching = enable; }
 
 	/// Pairs appended by the last broadphase call.
 	irr::scene::IComputeBuffer* getPairBuffer() const { return m_pairBuffer; }
@@ -180,11 +204,36 @@ private:
 	 *        loop is bounded from there; otherwise the bound is reduced on the GPU.
 	 * @return False if a kernel is unavailable.
 	 */
+	/// refitOnly reuses the existing topology and only re-fits AABBs - bounds stay conservative so
+	/// no pair can be missed, but tree quality decays as bodies drift from their sorted order.
 	bool buildTreeCore(irr::scene::IComputeBuffer* leafAabbs, irr::scene::IComputeBuffer* sortedCodes,
-					   unsigned int numLeaf, int& rootIndex, std::vector<int>* distanceOut);
+					   unsigned int numLeaf, int& rootIndex, std::vector<int>* distanceOut, bool refitOnly = false,
+					   irr::scene::IComputeBuffer* refitSleepStates = 0,
+					   irr::scene::IComputeBuffer* leafToBody = 0);
+
+	/**
+	 * @brief Re-fits only the internal nodes above leaves whose AABB could have changed.
+	 * @param leafAabbs Leaf AABBs, indexed by each sorted code's value field.
+	 * @param sortedCodes Morton codes sorted ascending.
+	 * @param numLeaf Leaf count.
+	 * @param sleepStates Per-body sleep bits that gated this step's world-AABB update.
+	 * @param leafToBody Leaf row -> body index, so the sleep bit of a leaf can be found.
+	 * @return False when the kernels are unavailable, leaving the caller to fit everything.
+	 */
+	bool refitDirtySubtrees(irr::scene::IComputeBuffer* leafAabbs,
+							irr::scene::IComputeBuffer* sortedCodes, unsigned int numLeaf,
+							irr::scene::IComputeBuffer* sleepStates,
+							irr::scene::IComputeBuffer* leafToBody);
 
 	/// Identity leaf->body map for the resident path, which never splits off large AABBs.
 	bool ensureIdentityIndexMap(unsigned int numAabbs);
+
+	/**
+	 * @brief Identity leaf->body map for callers that already gathered their AABBs.
+	 * @param count Leaves needing an entry.
+	 * @return The cached buffer, resized and refilled only when count changes.
+	 */
+	irr::scene::IComputeBuffer* ensureLeafIdentity(unsigned int count);
 
 	irr::video::IVideoDriver* m_driver;
 	bool m_doubleSingle;
@@ -206,6 +255,17 @@ private:
 	int m_internalMaterial;
 	int m_distanceMaterial;
 	int m_treeAabbMaterial;
+
+	// Sparse refit (B3LbvhRefit.hlsl)
+	int m_markDirtyMaterial;
+	int m_refitDirtyMaterial;
+	irr::scene::IComputeBuffer* m_refitParamBuffer;
+	irr::scene::IComputeBuffer* m_dirtyStampBuffer;
+	irr::scene::IComputeBuffer* m_dirtyNodeBuffer;
+	irr::scene::IComputeBuffer* m_dirtyNodeCountBuffer;
+	irr::scene::IComputeBuffer* m_dirtyCountParamBuffer;
+	unsigned int m_dirtyStampCapacity;
+	unsigned int m_refitFrameStamp;
 
 	irr::scene::IComputeBuffer* m_treeParamBuffer;
 	irr::scene::IComputeBuffer* m_sortedMortonBuffer;
@@ -241,6 +301,17 @@ private:
 
 	irr::scene::IComputeBuffer* m_separateParamBuffer;
 	irr::scene::IComputeBuffer* m_smallIndexBuffer;
+	/// Cached from the last FULL build so a refit needs neither the depth reduction nor the
+	/// root-index readback (both are stalls, and neither can change while topology is reused).
+	int m_cachedRootIndex;
+	int m_cachedMaxDistance;
+	irr::scene::IComputeBuffer* m_cachedSortedCodes;
+	unsigned int m_cachedLeafCount;
+	/// Internal-node count the cached leaf ranges describe; 0 when they must be recomputed.
+	unsigned int m_cachedLeafRangeCount;
+	bool m_leafRangeCaching;
+	irr::scene::IComputeBuffer* m_leafIdentityBuffer;
+	unsigned int m_leafIdentityCount;
 	irr::scene::IComputeBuffer* m_largeIndexBuffer;
 	irr::scene::IComputeBuffer* m_largeAabbBuffer;
 };

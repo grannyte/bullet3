@@ -245,10 +245,12 @@ public:
 	 * @param bodies Device-resident bodies.
 	 * @param numBodies Bodies in that buffer.
 	 * @param margin Collision margin added to every bound.
+	 * @param sleepState Optional previous-step sleep bits; sleeping bodies keep their existing bound.
 	 * @return False if the kernel is unavailable or the shapes were never uploaded.
 	 */
 	bool computeWorldAabbsResident(irr::scene::IComputeBuffer* bodies, unsigned int numBodies,
-								   float margin = 0.f);
+								   float margin = 0.f,
+								   irr::scene::IComputeBuffer* sleepState = 0);
 
 	/**
 	 * @brief computeConvexContacts against a device-resident pair list of GPU-decided length.

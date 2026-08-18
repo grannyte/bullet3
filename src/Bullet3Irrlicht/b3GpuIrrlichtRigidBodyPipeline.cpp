@@ -31,7 +31,7 @@ static_assert(sizeof(b3GpuIrrlichtRigidBodyPipeline::b3IrrBodyTransform) == 28,
 
 b3GpuIrrlichtRigidBodyPipeline::b3GpuIrrlichtRigidBodyPipeline(irr::video::IVideoDriver* driver)
 	: m_driver(driver), m_doubleSingle(false), m_bodyBuffer(0), m_paramBuffer(0), m_transformBuffer(0),
-	  m_integrateMaterial(-1), m_integratePackMaterial(-1), m_gravity(b3MakeVector3(0.f, -9.8f, 0.f)), m_angularDamping(0.99f)
+	  m_renderTransformBuffer(0), m_integrateMaterial(-1), m_integratePackMaterial(-1), m_gravity(b3MakeVector3(0.f, -9.8f, 0.f)), m_angularDamping(0.99f)
 {
 }
 
@@ -42,6 +42,7 @@ b3GpuIrrlichtRigidBodyPipeline::~b3GpuIrrlichtRigidBodyPipeline()
 	if (m_paramBuffer)
 		m_paramBuffer->drop();
 	b3IrrGpu::dropBuffer(m_transformBuffer);
+	b3IrrGpu::dropBuffer(m_renderTransformBuffer);
 }
 
 bool b3GpuIrrlichtRigidBodyPipeline::init(irr::io::IFileSystem* fileSystem, bool doubleSingle)
@@ -167,21 +168,24 @@ void b3GpuIrrlichtRigidBodyPipeline::readBodiesFromGpu()
 }
 
 bool b3GpuIrrlichtRigidBodyPipeline::integrateResident(irr::scene::IComputeBuffer* bodies,
-													   unsigned int numBodies, float deltaTime)
+													   unsigned int numBodies, float deltaTime,
+													   irr::scene::IComputeBuffer* sleepState)
 {
-	return dispatchIntegrate(m_integrateMaterial, bodies, numBodies, deltaTime, false);
+	return dispatchIntegrate(m_integrateMaterial, bodies, numBodies, deltaTime, false, sleepState);
 }
 
 bool b3GpuIrrlichtRigidBodyPipeline::integrateAndPackResident(irr::scene::IComputeBuffer* bodies,
-															  unsigned int numBodies, float deltaTime)
+															  unsigned int numBodies, float deltaTime,
+															  irr::scene::IComputeBuffer* sleepState)
 {
-	return dispatchIntegrate(m_integratePackMaterial, bodies, numBodies, deltaTime, true);
+	return dispatchIntegrate(m_integratePackMaterial, bodies, numBodies, deltaTime, true, sleepState);
 }
 
 bool b3GpuIrrlichtRigidBodyPipeline::dispatchIntegrate(int material,
 													   irr::scene::IComputeBuffer* bodies,
 													   unsigned int numBodies, float deltaTime,
-													   bool packTransforms)
+													   bool packTransforms,
+													   irr::scene::IComputeBuffer* sleepState)
 {
 	if (material < 0 || !bodies || numBodies == 0)
 		return false;
@@ -190,7 +194,10 @@ bool b3GpuIrrlichtRigidBodyPipeline::dispatchIntegrate(int material,
 	if (packTransforms)
 	{
 		if (m_doubleSingle)
+		{
 			b3IrrGpu::ensureBuffer<b3IrrGpu::b3IrrBodyTransformDS>(m_transformBuffer, numBodies);
+			b3IrrGpu::ensureBuffer<b3IrrBodyTransform>(m_renderTransformBuffer, numBodies);
+		}
 		else
 			b3IrrGpu::ensureBuffer<b3IrrBodyTransform>(m_transformBuffer, numBodies);
 	}
@@ -211,9 +218,15 @@ bool b3GpuIrrlichtRigidBodyPipeline::dispatchIntegrate(int material,
 	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)material;
 	m_driver->setMaterial(mat);
 	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	if (sleepState)
+		m_driver->bindComputeBuffer(1, sleepState, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(0, bodies, irr::video::EHBT_COMPUTE);
 	if (packTransforms)
+	{
 		m_driver->bindComputeBuffer(1, m_transformBuffer, irr::video::EHBT_COMPUTE);
+		if (m_doubleSingle)
+			m_driver->bindComputeBuffer(2, m_renderTransformBuffer, irr::video::EHBT_COMPUTE);
+	}
 	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((numBodies + 63) / 64, 1, 1));
 	m_driver->unbindComputeResources();
 
