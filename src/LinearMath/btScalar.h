@@ -141,10 +141,11 @@ inline int btIsDoublePrecision()
 			//	#define BT_USE_SIMD_VECTOR3
 			#endif
 
-			//#define BT_USE_SSE_IN_API
-			//AVX disabled: this reverts btVector3/btQuaternion/btDbvt/btSolverBody and the
-			//constraint row solvers to the scalar paths upstream compiles for double precision.
-			//#define BT_USE_AVX
+			// Routes btVector3/btQuaternion operators through AVX intrinsics. Layout is unchanged
+			// (BT_USE_AVX already makes btVector3 32 bytes/32-aligned) but the loads become ALIGNED,
+			// so any btVector3 that ends up on a non-32-byte boundary now faults instead of working.
+			#define BT_USE_SSE_IN_API
+			#define BT_USE_AVX
 			#ifdef BT_USE_AVX
 
 #if (_MSC_FULL_VER >= 170050727)//Visual Studio 2012 can compile SSE4/FMA3 (but SSE4/FMA3 is not enabled by default)

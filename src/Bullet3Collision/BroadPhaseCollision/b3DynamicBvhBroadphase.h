@@ -28,7 +28,7 @@ subject to the following restrictions:
 //
 
 #define B3_DBVT_BP_PROFILE 0
-//#define B3_DBVT_BP_SORTPAIRS				1
+#define B3_DBVT_BP_SORTPAIRS				1
 #define B3_DBVT_BP_PREVENTFALSEUPDATE 0
 #define B3_DBVT_BP_ACCURATESLEEPING 0
 #define B3_DBVT_BP_ENABLE_BENCHMARK 0

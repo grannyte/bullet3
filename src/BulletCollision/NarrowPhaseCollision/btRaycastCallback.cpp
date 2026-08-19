@@ -136,8 +136,10 @@ void btTriangleConvexcastCallback::processTriangle(btVector3* triangle, int part
 	btVoronoiSimplexSolver simplexSolver;
 	btGjkEpaPenetrationDepthSolver gjkEpaPenetrationSolver;
 
-//#define  USE_SUBSIMPLEX_CONVEX_CAST 1
-//if you reenable USE_SUBSIMPLEX_CONVEX_CAST see commented out code below
+// btSubsimplexConvexCast is cheaper than btContinuousConvexCollision but returns its normal in
+// LOCAL space and does no penetration-depth recovery -- the rotate-to-world block below is enabled
+// with it, and must stay that way or every triangle-mesh sweep reports a wrongly-oriented normal.
+#define  USE_SUBSIMPLEX_CONVEX_CAST 1
 #ifdef USE_SUBSIMPLEX_CONVEX_CAST
 	btSubsimplexConvexCast convexCaster(m_convexShape, &triangleShape, &simplexSolver);
 #else
@@ -156,12 +158,10 @@ void btTriangleConvexcastCallback::processTriangle(btVector3* triangle, int part
 			if (castResult.m_fraction < m_hitFraction)
 			{
 				/* btContinuousConvexCast's normal is already in world space */
-				/*
 #ifdef USE_SUBSIMPLEX_CONVEX_CAST
 				//rotate normal into worldspace
 				castResult.m_normal = m_convexShapeFrom.getBasis() * castResult.m_normal;
 #endif //USE_SUBSIMPLEX_CONVEX_CAST
-*/
 				castResult.m_normal.normalize();
 
 				reportHit(castResult.m_normal,

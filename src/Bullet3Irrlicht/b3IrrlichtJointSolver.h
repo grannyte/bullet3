@@ -135,6 +135,11 @@ public:
 	 */
 	static b3IrrJoint makePoint2Point(int bodyA, int bodyB, const float* pivotA, const float* pivotB);
 
+	/// Device-resident joints from the last uploadJoints; 0 before one has run.
+	irr::scene::IComputeBuffer* getJointBuffer() const { return m_jointBuffer; }
+	/// Joints in that buffer.
+	unsigned int getResidentJointCount() const { return m_residentJoints; }
+
 	/**
 	 * @brief Reads back the field values the GPU actually sees, proving the two layouts agree.
 	 * @param joints Joints to upload and probe.
