@@ -64,6 +64,26 @@ public:
 	bool executeResident(irr::scene::IComputeBuffer* input, unsigned int numElems,
 						 unsigned int keyBits, irr::scene::IComputeBuffer** result);
 
+	/**
+	 * @brief executeResident for a count that only exists on the device (an append counter).
+	 *
+	 * The histogram and every dispatch are sized from capacity, so the ~1M-element limit applies
+	 * to capacity, not to the live count; elements at or past the live count are never moved.
+	 *
+	 * @param input Device-resident (key, value) pairs.
+	 * @param capacity Elements the input buffer can hold; the live count is clamped to it.
+	 * @param countBuffer EHBF_DRAW_INDIRECT_ARGS buffer holding the live count at byte 0.
+	 * @param keyBits Significant key bits; fewer bits skip whole passes.
+	 * @param result Receives the buffer holding the sorted result. Valid until the next call.
+	 * @return False if the kernels are unavailable or capacity exceeds maxElements().
+	 */
+	bool executeResidentCounted(irr::scene::IComputeBuffer* input, unsigned int capacity,
+								irr::scene::IComputeBuffer* countBuffer, unsigned int keyBits,
+								irr::scene::IComputeBuffer** result);
+
+	/// Largest element count (or capacity) one sort can take before the histogram scan would recurse.
+	static unsigned int maxElements();
+
 private:
 	b3IrrlichtRadixSort(const b3IrrlichtRadixSort&);
 	b3IrrlichtRadixSort& operator=(const b3IrrlichtRadixSort&);
@@ -85,10 +105,11 @@ private:
 	 * @param numElems Elements to sort.
 	 * @param keyBits Significant key bits.
 	 * @param result Receives whichever work buffer ended up holding the sorted data.
+	 * @param liveCount Optional device-side count; numElems is then the capacity.
 	 * @return False if the histogram scan failed.
 	 */
 	bool sortPasses(irr::scene::IComputeBuffer* input, unsigned int numElems, unsigned int keyBits,
-					irr::scene::IComputeBuffer** result);
+					irr::scene::IComputeBuffer** result, irr::scene::IComputeBuffer* liveCount = 0);
 
 	irr::video::IVideoDriver* m_driver;
 	b3IrrlichtPrefixScan* m_scan;

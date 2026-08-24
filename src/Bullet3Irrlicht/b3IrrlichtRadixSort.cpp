@@ -15,7 +15,7 @@ struct RadixParams
 	unsigned int numElems;
 	unsigned int numBlocks;
 	unsigned int bitShift;
-	unsigned int pad0;
+	unsigned int useLiveCount;
 };
 
 static_assert(sizeof(RadixParams) == 16, "RadixParams must match the HLSL struct stride");
@@ -82,7 +82,8 @@ bool b3IrrlichtRadixSort::ensureWorkBuffers(unsigned int numElems, unsigned int 
 }
 
 bool b3IrrlichtRadixSort::sortPasses(irr::scene::IComputeBuffer* input, unsigned int numElems,
-									 unsigned int keyBits, irr::scene::IComputeBuffer** result)
+									 unsigned int keyBits, irr::scene::IComputeBuffer** result,
+									 irr::scene::IComputeBuffer* liveCount)
 {
 	const irr::u32 numBlocks = (numElems + ELEMS_PER_BLOCK - 1) / ELEMS_PER_BLOCK;
 
@@ -97,7 +98,7 @@ bool b3IrrlichtRadixSort::sortPasses(irr::scene::IComputeBuffer* input, unsigned
 		params.numElems = numElems;
 		params.numBlocks = numBlocks;
 		params.bitShift = pass * BITS_PER_PASS;
-		params.pad0 = 0;
+		params.useLiveCount = liveCount ? 1u : 0u;
 		memcpy(m_paramBuffer->getBufferPointer(), &params, sizeof(params));
 		m_paramBuffer->setDirty();
 
@@ -108,6 +109,8 @@ bool b3IrrlichtRadixSort::sortPasses(irr::scene::IComputeBuffer* input, unsigned
 		m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(1, src, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(0, m_histogram, irr::video::EHBT_COMPUTE);
+		if (liveCount)
+			m_driver->bindComputeBuffer(2, liveCount, irr::video::EHBT_COMPUTE);
 		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(numBlocks, 1, 1));
 		m_driver->unbindComputeResources();
 
@@ -121,6 +124,8 @@ bool b3IrrlichtRadixSort::sortPasses(irr::scene::IComputeBuffer* input, unsigned
 		m_driver->bindComputeBuffer(1, src, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(2, m_scannedHistogram, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(1, dst, irr::video::EHBT_COMPUTE);
+		if (liveCount)
+			m_driver->bindComputeBuffer(2, liveCount, irr::video::EHBT_COMPUTE);
 		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(numBlocks, 1, 1));
 		m_driver->unbindComputeResources();
 
@@ -176,4 +181,31 @@ bool b3IrrlichtRadixSort::executeResident(irr::scene::IComputeBuffer* input, uns
 		return false;
 
 	return sortPasses(input, numElems, keyBits, result);
+}
+
+unsigned int b3IrrlichtRadixSort::maxElements()
+{
+	return (b3IrrlichtPrefixScan::maxElements() / NUM_BUCKETS) * ELEMS_PER_BLOCK;
+}
+
+bool b3IrrlichtRadixSort::executeResidentCounted(irr::scene::IComputeBuffer* input,
+												  unsigned int capacity,
+												  irr::scene::IComputeBuffer* countBuffer,
+												  unsigned int keyBits,
+												  irr::scene::IComputeBuffer** result)
+{
+	if (m_streamCountMaterial < 0 || !input || !countBuffer || !result || capacity == 0 ||
+		keyBits == 0 || keyBits > 32)
+		return false;
+
+	const irr::u32 numBlocks = (capacity + ELEMS_PER_BLOCK - 1) / ELEMS_PER_BLOCK;
+	const irr::u32 histSize = NUM_BUCKETS * numBlocks;
+	// Sized from capacity, never from the live count - refuse rather than sort a prefix.
+	if (histSize > b3IrrlichtPrefixScan::maxElements())
+		return false;
+
+	if (!ensureWorkBuffers(capacity, histSize))
+		return false;
+
+	return sortPasses(input, capacity, keyBits, result, countBuffer);
 }

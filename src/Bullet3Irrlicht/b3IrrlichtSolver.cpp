@@ -33,7 +33,7 @@ b3IrrlichtSolver::b3IrrlichtSolver(irr::video::IVideoDriver* driver)
 	  m_clearLoadMaterial(-1), m_accumLoadMaterial(-1), m_buildActiveMaterial(-1),
 	  m_applyActiveMaterial(-1), m_clearLoadActiveMaterial(-1), m_dispatch(0), m_activeDispatch(0),
 	  m_paramBuffer(0), m_bodyBuffer(0), m_contactBuffer(0), m_inertiaBuffer(0), m_deltaBuffer(0),
-	  m_impulseBuffer(0), m_loadBuffer(0), m_activeParamBuffer(0), m_activeBodyBuffer(0),
+	  m_impulseBuffer(0), m_rollingAccumBuffer(0), m_loadBuffer(0), m_activeParamBuffer(0), m_activeBodyBuffer(0),
 	  m_activeCountBuffer(0), m_claimBuffer(0), m_impulseFloats(0), m_activeGating(true),
 	  m_activeStamp(0)
 {
@@ -55,6 +55,7 @@ void b3IrrlichtSolver::releaseBuffers()
 	dropBuffer(m_inertiaBuffer);
 	dropBuffer(m_deltaBuffer);
 	dropBuffer(m_impulseBuffer);
+	dropBuffer(m_rollingAccumBuffer);
 	dropBuffer(m_loadBuffer);
 	dropBuffer(m_activeBodyBuffer);
 	dropBuffer(m_activeCountBuffer);
@@ -116,7 +117,8 @@ bool b3IrrlichtSolver::isResidentPathAvailable() const
 bool b3IrrlichtSolver::solveContacts(std::vector<b3RigidBodyData>& bodies,
 									 const std::vector<float>& invInertiaDiag,
 									 const std::vector<b3Contact4Data>& contacts,
-									 int iterations, float deltaTime, float erp)
+									 int iterations, float deltaTime, float erp,
+									 irr::scene::IComputeBuffer* rollingFriction)
 {
 	// The std::vector path moves 80-byte bodies; the df64 kernels index a 96-byte stride.
 	if (m_doubleSingle)
@@ -180,6 +182,10 @@ bool b3IrrlichtSolver::solveContacts(std::vector<b3RigidBodyData>& bodies,
 	memset(m_impulseBuffer->getBufferPointer(), 0, m_impulseFloats * sizeof(float));
 	m_impulseBuffer->setDirty();
 
+	ensureBuffer<float>(m_rollingAccumBuffer, numContacts);
+	memset(m_rollingAccumBuffer->getBufferPointer(), 0, numContacts * sizeof(float));
+	m_rollingAccumBuffer->setDirty();
+
 	ensureBuffer<SolverParams>(m_paramBuffer, 1);
 
 	SolverParams p;
@@ -202,9 +208,12 @@ bool b3IrrlichtSolver::solveContacts(std::vector<b3RigidBodyData>& bodies,
 		m_driver->bindComputeBuffer(1, m_contactBuffer, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(2, m_inertiaBuffer, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(3, m_loadBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		if (rollingFriction)
+			m_driver->bindComputeBuffer(7, rollingFriction, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(0, m_bodyBuffer, irr::video::EHBT_COMPUTE);
 		m_driver->bindComputeBuffer(1, m_deltaBuffer, irr::video::EHBT_COMPUTE);
 		m_driver->bindComputeBuffer(2, m_impulseBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->bindComputeBuffer(6, m_rollingAccumBuffer, irr::video::EHBT_COMPUTE);
 		m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(contactGroups, 1, 1));
 		m_driver->unbindComputeResources();
 
@@ -250,10 +259,15 @@ bool b3IrrlichtSolver::solveContactsResident(irr::scene::IComputeBuffer* bodies,
 											 irr::scene::IComputeBuffer* contactCount,
 											 unsigned int maxContacts, int iterations,
 											 float deltaTime, float erp,
-											 irr::scene::IComputeBuffer* sleepState)
+											 irr::scene::IComputeBuffer* sleepState,
+											 irr::scene::IComputeBuffer* rollingFriction)
 {
 	if (!isResidentPathAvailable() || !bodies || !contacts || !contactCount || numBodies == 0 ||
 		maxContacts == 0)
+		return false;
+
+	// A body buffer of the other precision's stride would be solved misaligned, silently.
+	if (!b3IrrGpu::strideMatches(bodies, b3IrrGpu::bodyStride(m_doubleSingle)))
 		return false;
 
 	if (!m_inertiaBuffer || m_inertiaBuffer->getStructureCount() < numBodies)
@@ -263,6 +277,7 @@ bool b3IrrlichtSolver::solveContactsResident(irr::scene::IComputeBuffer* bodies,
 	ensureBuffer<int>(m_loadBuffer, numBodies);
 	ensureBuffer<float>(m_impulseBuffer, maxContacts * 12);
 	m_impulseFloats = maxContacts * 12;
+	ensureBuffer<float>(m_rollingAccumBuffer, maxContacts);
 	ensureBuffer<SolverParams>(m_paramBuffer, 1);
 
 	// numContacts is filled in by the GPU below; the rest has to come from here.
@@ -285,6 +300,7 @@ bool b3IrrlichtSolver::solveContactsResident(irr::scene::IComputeBuffer* bodies,
 	m_driver->setMaterial(mat);
 	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(2, m_impulseBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->bindComputeBuffer(6, m_rollingAccumBuffer, irr::video::EHBT_COMPUTE);
 	m_driver->dispatchComputeShaderIndirect(args, 0);
 	m_driver->unbindComputeResources();
 
@@ -326,9 +342,12 @@ bool b3IrrlichtSolver::solveContactsResident(irr::scene::IComputeBuffer* bodies,
 		m_driver->bindComputeBuffer(3, m_loadBuffer, irr::video::EHBT_SHADER_RESOURCE);
 		if (sleepState)
 			m_driver->bindComputeBuffer(4, sleepState, irr::video::EHBT_SHADER_RESOURCE);
+		if (rollingFriction)
+			m_driver->bindComputeBuffer(7, rollingFriction, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(0, bodies, irr::video::EHBT_COMPUTE);
 		m_driver->bindComputeBuffer(1, m_deltaBuffer, irr::video::EHBT_COMPUTE);
 		m_driver->bindComputeBuffer(2, m_impulseBuffer, irr::video::EHBT_COMPUTE);
+		m_driver->bindComputeBuffer(6, m_rollingAccumBuffer, irr::video::EHBT_COMPUTE);
 		m_driver->dispatchComputeShaderIndirect(args, 0);
 		m_driver->unbindComputeResources();
 

@@ -129,10 +129,12 @@ public:
 	 *
 	 * @param aabbs Device-resident world AABBs, one per body.
 	 * @param numAabbs AABBs in that buffer; at least 2.
-	 * @param maxPairs Append capacity; the count is clamped to it downstream.
+	 * @param maxPairs Append capacity; the count is clamped to it downstream. Above
+	 *        maxSortablePairs() while resident sorting is on, the call refuses (see setResidentPairSorting).
 	 * @param subset Optional body-index list to build the tree over instead of all of them.
 	 * @param subsetCount Entries in subset; ignored when subset is null.
-	 * @return False if the kernels are unavailable or the tree could not be built.
+	 * @return False if the kernels are unavailable, the tree could not be built, the AABB stride
+	 *         belongs to the other precision, or the pair sort was required and refused.
 	 *
 	 * @param refit Reuse the previous topology and only re-fit AABBs. Conservative, so no pair can
 	 *        be missed, but quality decays as bodies drift; ignored if the leaf count changed.
@@ -159,10 +161,44 @@ public:
 	/// the sleep-gated query cannot read them. Off restores a rebuild of them every step.
 	void setLeafRangeCaching(bool enable) { m_leafRangeCaching = enable; }
 
-	/// Pairs appended by the last broadphase call.
-	irr::scene::IComputeBuffer* getPairBuffer() const { return m_pairBuffer; }
+	/// Pairs from the last broadphase call - in canonical (low, high) order when the resident sort
+	/// ran (see setResidentPairSorting), otherwise in append order.
+	irr::scene::IComputeBuffer* getPairBuffer() const
+	{
+		return m_sortedPairBuffer ? m_sortedPairBuffer : m_pairBuffer;
+	}
 	/// Appended pair count, as EHBF_DRAW_INDIRECT_ARGS - feeds an indirect narrowphase dispatch.
 	irr::scene::IComputeBuffer* getPairCountBuffer() const { return m_pairCountBuffer; }
+
+	/// Whether B3PairSort.hlsl compiled, i.e. the resident path can order its pairs on the GPU.
+	bool isResidentPairSortAvailable() const;
+
+	/**
+	 * @brief Sorts the resident pair list into sortPairsForDeterminism's order, on the GPU.
+	 *
+	 * On by default. With it on, calculateOverlappingPairsResident REFUSES (returns false) a
+	 * maxPairs above maxSortablePairs() rather than sorting a truncated prefix.
+	 *
+	 * @param enable False restores append order, which varies run to run.
+	 */
+	void setResidentPairSorting(bool enable) { m_sortResidentPairs = enable; }
+	bool getResidentPairSorting() const { return m_sortResidentPairs; }
+
+	/// Largest maxPairs the resident sort accepts - the radix sort's histogram-scan limit.
+	static unsigned int maxSortablePairs();
+
+	/// Whether the last resident broadphase call left its pairs sorted.
+	bool lastPairsWereSorted() const { return m_sortedPairBuffer != 0; }
+
+	/// Tree left by the last calculateOverlappingPairsResident call, for kernels that traverse it
+	/// (b3IrrlichtQueries). Only the resident path keeps these consistent with each other.
+	irr::scene::IComputeBuffer* getResidentChildNodeBuffer() const { return m_childNodeBuffer; }
+	irr::scene::IComputeBuffer* getResidentInternalAabbBuffer() const { return m_internalAabbBuffer; }
+	irr::scene::IComputeBuffer* getResidentSortedCodeBuffer() const { return m_cachedSortedCodes; }
+	/// Leaf row -> body index of that call: the caller's subset buffer, else the identity map.
+	irr::scene::IComputeBuffer* getResidentLeafToBodyBuffer() const { return m_residentLeafToBody; }
+	int getResidentRootIndex() const { return m_cachedRootIndex; }
+	unsigned int getResidentLeafCount() const { return m_cachedLeafCount; }
 
 	static bool isLeafIndex(int index) { return (index >> 31) == 0; }
 	static int stripMarker(int index) { return index & (~0x80000000); }
@@ -289,6 +325,25 @@ private:
 	irr::scene::IComputeBuffer* m_rayBuffer;
 	irr::scene::IComputeBuffer* m_rayPairBuffer;
 
+	// Resident pair ordering (B3PairSort.hlsl). Its own radix sort: the shared one's ping-pong
+	// result is the cached Morton order a refit still reads.
+	int m_normalisePairsMaterial;
+	int m_swapKeyValueMaterial;
+	b3IrrlichtRadixSort* m_pairSort;
+	irr::scene::IComputeBuffer* m_pairSortParamBuffer;
+	irr::scene::IComputeBuffer* m_pairSortInputBuffer;
+	/// Non-owning: m_pairSort's result buffer from the last resident call, 0 when unsorted.
+	irr::scene::IComputeBuffer* m_sortedPairBuffer;
+	bool m_sortResidentPairs;
+
+	/**
+	 * @brief Orders m_pairBuffer's live prefix into m_sortedPairBuffer, entirely on the device.
+	 * @param maxPairs Pair buffer capacity; the live count comes from m_pairCountBuffer.
+	 * @param numBodies Bound on every body index, which sets how many radix passes run.
+	 * @return False if the kernels are unavailable or maxPairs exceeds maxSortablePairs().
+	 */
+	bool sortResidentPairs(unsigned int maxPairs, unsigned int numBodies);
+
 	// Large-AABB side list. m_smallIndices/m_largeIndices map back to the caller's array order.
 	int m_separateMaterial;
 	int m_largePairMaterial;
@@ -307,6 +362,8 @@ private:
 	int m_cachedMaxDistance;
 	irr::scene::IComputeBuffer* m_cachedSortedCodes;
 	unsigned int m_cachedLeafCount;
+	/// Non-owning: the subset buffer or m_smallIndexBuffer the last resident call traversed with.
+	irr::scene::IComputeBuffer* m_residentLeafToBody;
 	/// Internal-node count the cached leaf ranges describe; 0 when they must be recomputed.
 	unsigned int m_cachedLeafRangeCount;
 	bool m_leafRangeCaching;

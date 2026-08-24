@@ -70,12 +70,15 @@ public:
 	 * @param iterations Sequential-impulse passes; more converges harder, never fewer than 1.
 	 * @param deltaTime Timestep the impulses are scaled against.
 	 * @param erp Baumgarte position-correction factor in [0,1].
+	 * @param rollingFriction Per-collidable rolling friction from
+	 *        b3IrrlichtNarrowphase::getRollingFrictionBuffer; 0 disables the rolling row.
 	 * @return False if the kernels are unavailable.
 	 */
 	bool solveContacts(std::vector<b3RigidBodyData>& bodies,
 					   const std::vector<float>& invInertiaDiag,
 					   const std::vector<b3Contact4Data>& contacts,
-					   int iterations = 4, float deltaTime = 1.f / 60.f, float erp = 0.2f);
+					   int iterations = 4, float deltaTime = 1.f / 60.f, float erp = 0.2f,
+					   irr::scene::IComputeBuffer* rollingFriction = 0);
 
 	/**
 	 * @brief Whether the device-buffer entry points below can run.
@@ -107,6 +110,8 @@ public:
 	 * @param erp Baumgarte position-correction factor in [0,1].
 	 * @param sleepState Per-body sleep state from b3IrrlichtSleep; a contact whose BOTH bodies are
 	 *        asleep is skipped. 0 leaves the binding empty, which reads as all-awake.
+	 * @param rollingFriction Per-collidable rolling friction from
+	 *        b3IrrlichtNarrowphase::getRollingFrictionBuffer; 0 disables the rolling row.
 	 * @return False if the kernels are unavailable or an argument is missing.
 	 */
 	bool solveContactsResident(irr::scene::IComputeBuffer* bodies, unsigned int numBodies,
@@ -114,7 +119,8 @@ public:
 							   irr::scene::IComputeBuffer* contactCount,
 							   unsigned int maxContacts, int iterations = 4,
 							   float deltaTime = 1.f / 60.f, float erp = 0.2f,
-							   irr::scene::IComputeBuffer* sleepState = 0);
+							   irr::scene::IComputeBuffer* sleepState = 0,
+							   irr::scene::IComputeBuffer* rollingFriction = 0);
 
 	/**
 	 * @brief Runs the resident solve's per-body passes over the contacted bodies only.
@@ -176,6 +182,8 @@ private:
 	irr::scene::IComputeBuffer* m_inertiaBuffer;
 	irr::scene::IComputeBuffer* m_deltaBuffer;
 	irr::scene::IComputeBuffer* m_impulseBuffer;
+	/// 1 float per contact: rolling-friction impulse spent this step (magnitude ledger).
+	irr::scene::IComputeBuffer* m_rollingAccumBuffer;
 	irr::scene::IComputeBuffer* m_loadBuffer;
 	irr::scene::IComputeBuffer* m_activeParamBuffer;
 	irr::scene::IComputeBuffer* m_activeBodyBuffer;

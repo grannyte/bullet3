@@ -13,17 +13,27 @@ static_assert(sizeof(b3IrrGpu::b3IrrBodyTransformDS) == 40, "b3IrrBodyTransformD
 
 namespace
 {
-// Mirrors IntegrateParams in B3IntegrateTransforms.hlsl - 32 bytes, float4 first.
+// Mirrors IntegrateParams in B3IntegrateTransformsBody.hlsli - 48 bytes, float4 first.
 struct IntegrateParams
 {
 	float gravityAcceleration[4];
 	float timeStep;
 	float angularDamping;
 	float numNodes;
+	float linearDamping;
+	float useUniformGravity;
+	float usePerBodyDamping;
 	float pad0;
+	float pad1;
 };
 
-static_assert(sizeof(IntegrateParams) == 32, "IntegrateParams must match the HLSL struct stride");
+struct IrrFloat4
+{
+	float x, y, z, w;
+};
+
+static_assert(sizeof(IntegrateParams) == 48, "IntegrateParams must match the HLSL struct stride");
+static_assert(sizeof(IrrFloat4) == 16, "GravityAccel/BodyDamping elements are float4 in HLSL");
 // 28 bytes: the demo's DemoTransform and B3IntegrateTransforms.hlsl's b3IrrBodyTransform.
 static_assert(sizeof(b3GpuIrrlichtRigidBodyPipeline::b3IrrBodyTransform) == 28,
 			  "The packed transform must stay 28 bytes to match DemoTransform and the HLSL struct");
@@ -31,7 +41,9 @@ static_assert(sizeof(b3GpuIrrlichtRigidBodyPipeline::b3IrrBodyTransform) == 28,
 
 b3GpuIrrlichtRigidBodyPipeline::b3GpuIrrlichtRigidBodyPipeline(irr::video::IVideoDriver* driver)
 	: m_driver(driver), m_doubleSingle(false), m_bodyBuffer(0), m_paramBuffer(0), m_transformBuffer(0),
-	  m_renderTransformBuffer(0), m_integrateMaterial(-1), m_integratePackMaterial(-1), m_gravity(b3MakeVector3(0.f, -9.8f, 0.f)), m_angularDamping(0.99f)
+	  m_renderTransformBuffer(0), m_gravityBuffer(0), m_externalGravityBuffer(0), m_dampingBuffer(0),
+	  m_integrateMaterial(-1), m_integratePackMaterial(-1), m_gravity(b3MakeVector3(0.f, -9.8f, 0.f)),
+	  m_angularDamping(0.99f), m_linearDamping(1.f)
 {
 }
 
@@ -43,6 +55,55 @@ b3GpuIrrlichtRigidBodyPipeline::~b3GpuIrrlichtRigidBodyPipeline()
 		m_paramBuffer->drop();
 	b3IrrGpu::dropBuffer(m_transformBuffer);
 	b3IrrGpu::dropBuffer(m_renderTransformBuffer);
+	b3IrrGpu::dropBuffer(m_gravityBuffer);
+	b3IrrGpu::dropBuffer(m_dampingBuffer);
+}
+
+bool b3GpuIrrlichtRigidBodyPipeline::uploadGravity(const std::vector<b3Vector3>& gravityAccel,
+													unsigned int numBodies)
+{
+	if (numBodies == 0)
+		return false;
+
+	b3IrrGpu::ensureBuffer<IrrFloat4>(m_gravityBuffer, numBodies);
+	IrrFloat4* dst = (IrrFloat4*)m_gravityBuffer->getBufferPointer();
+	for (unsigned int i = 0; i < numBodies; ++i)
+	{
+		const bool have = i < gravityAccel.size();
+		dst[i].x = have ? gravityAccel[i].getX() : 0.f;
+		dst[i].y = have ? gravityAccel[i].getY() : 0.f;
+		dst[i].z = have ? gravityAccel[i].getZ() : 0.f;
+		dst[i].w = 0.f;
+	}
+	m_gravityBuffer->setDirty();
+	return true;
+}
+
+bool b3GpuIrrlichtRigidBodyPipeline::uploadDamping(const std::vector<float>& linear,
+													const std::vector<float>& angular,
+													unsigned int numBodies)
+{
+	if (numBodies == 0)
+		return false;
+
+	b3IrrGpu::ensureBuffer<IrrFloat4>(m_dampingBuffer, numBodies);
+	IrrFloat4* dst = (IrrFloat4*)m_dampingBuffer->getBufferPointer();
+	for (unsigned int i = 0; i < numBodies; ++i)
+	{
+		dst[i].x = i < linear.size() ? linear[i] : 0.f;
+		dst[i].y = i < angular.size() ? angular[i] : 0.f;
+		dst[i].z = 0.f;
+		dst[i].w = 0.f;
+	}
+	m_dampingBuffer->setDirty();
+	return true;
+}
+
+void b3GpuIrrlichtRigidBodyPipeline::clearPerBodyOverrides()
+{
+	b3IrrGpu::dropBuffer(m_gravityBuffer);
+	b3IrrGpu::dropBuffer(m_dampingBuffer);
+	m_externalGravityBuffer = 0;
 }
 
 bool b3GpuIrrlichtRigidBodyPipeline::init(irr::io::IFileSystem* fileSystem, bool doubleSingle)
@@ -131,6 +192,8 @@ void b3GpuIrrlichtRigidBodyPipeline::stepSimulation(float deltaTime)
 		m_paramBuffer = buffer;
 	}
 
+	irr::scene::IComputeBuffer* gravity = m_externalGravityBuffer ? m_externalGravityBuffer : m_gravityBuffer;
+
 	IntegrateParams params;
 	params.gravityAcceleration[0] = m_gravity.getX();
 	params.gravityAcceleration[1] = m_gravity.getY();
@@ -139,7 +202,11 @@ void b3GpuIrrlichtRigidBodyPipeline::stepSimulation(float deltaTime)
 	params.timeStep = deltaTime;
 	params.angularDamping = m_angularDamping;
 	params.numNodes = (float)m_cpuBodies.size();
+	params.linearDamping = m_linearDamping;
+	params.useUniformGravity = gravity ? 0.f : 1.f;
+	params.usePerBodyDamping = m_dampingBuffer ? 1.f : 0.f;
 	params.pad0 = 0.f;
+	params.pad1 = 0.f;
 
 	memcpy(m_paramBuffer->getBufferPointer(), &params, sizeof(params));
 	m_paramBuffer->setDirty();
@@ -149,6 +216,10 @@ void b3GpuIrrlichtRigidBodyPipeline::stepSimulation(float deltaTime)
 	m_driver->setMaterial(mat);
 
 	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	if (gravity)
+		m_driver->bindComputeBuffer(4, gravity, irr::video::EHBT_SHADER_RESOURCE);
+	if (m_dampingBuffer)
+		m_driver->bindComputeBuffer(5, m_dampingBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(0, m_bodyBuffer, irr::video::EHBT_COMPUTE);
 
 	// numthreads(64,1,1) in B3IntegrateTransforms.hlsl - the shader guards the tail.
@@ -190,6 +261,10 @@ bool b3GpuIrrlichtRigidBodyPipeline::dispatchIntegrate(int material,
 	if (material < 0 || !bodies || numBodies == 0)
 		return false;
 
+	// A body buffer of the other precision's stride would be integrated misaligned, silently.
+	if (!b3IrrGpu::strideMatches(bodies, b3IrrGpu::bodyStride(m_doubleSingle)))
+		return false;
+
 	b3IrrGpu::ensureBuffer<IntegrateParams>(m_paramBuffer, 1);
 	if (packTransforms)
 	{
@@ -202,6 +277,8 @@ bool b3GpuIrrlichtRigidBodyPipeline::dispatchIntegrate(int material,
 			b3IrrGpu::ensureBuffer<b3IrrBodyTransform>(m_transformBuffer, numBodies);
 	}
 
+	irr::scene::IComputeBuffer* gravity = m_externalGravityBuffer ? m_externalGravityBuffer : m_gravityBuffer;
+
 	IntegrateParams params;
 	params.gravityAcceleration[0] = m_gravity.getX();
 	params.gravityAcceleration[1] = m_gravity.getY();
@@ -210,7 +287,11 @@ bool b3GpuIrrlichtRigidBodyPipeline::dispatchIntegrate(int material,
 	params.timeStep = deltaTime;
 	params.angularDamping = m_angularDamping;
 	params.numNodes = (float)numBodies;
+	params.linearDamping = m_linearDamping;
+	params.useUniformGravity = gravity ? 0.f : 1.f;
+	params.usePerBodyDamping = m_dampingBuffer ? 1.f : 0.f;
 	params.pad0 = 0.f;
+	params.pad1 = 0.f;
 	memcpy(m_paramBuffer->getBufferPointer(), &params, sizeof(params));
 	m_paramBuffer->setDirty();
 
@@ -220,6 +301,10 @@ bool b3GpuIrrlichtRigidBodyPipeline::dispatchIntegrate(int material,
 	m_driver->bindComputeBuffer(0, m_paramBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	if (sleepState)
 		m_driver->bindComputeBuffer(1, sleepState, irr::video::EHBT_SHADER_RESOURCE);
+	if (gravity)
+		m_driver->bindComputeBuffer(4, gravity, irr::video::EHBT_SHADER_RESOURCE);
+	if (m_dampingBuffer)
+		m_driver->bindComputeBuffer(5, m_dampingBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(0, bodies, irr::video::EHBT_COMPUTE);
 	if (packTransforms)
 	{

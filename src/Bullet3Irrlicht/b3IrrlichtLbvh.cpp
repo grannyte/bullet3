@@ -39,12 +39,15 @@ b3IrrlichtLbvh::b3IrrlichtLbvh(irr::video::IVideoDriver* driver)
 	  m_leafRangeMaterial(-1), m_pairsMaterial(-1), m_pairParamBuffer(0),
 	  m_leafRangeBuffer(0), m_pairBuffer(0), m_pairCountBuffer(0),
 	  m_rayMaterial(-1), m_rayBuffer(0), m_rayPairBuffer(0),
+	  m_normalisePairsMaterial(-1), m_swapKeyValueMaterial(-1), m_pairSort(0),
+	  m_pairSortParamBuffer(0), m_pairSortInputBuffer(0), m_sortedPairBuffer(0),
+	  m_sortResidentPairs(true),
 	  m_separateMaterial(-1), m_largePairMaterial(-1), m_largeLargePairMaterial(-1),
 	  m_largeRayMaterial(-1), m_separateParamBuffer(0), m_smallIndexBuffer(0),
 	  m_largeIndexBuffer(0), m_largeAabbBuffer(0),
 	  m_leafIdentityBuffer(0), m_leafIdentityCount(0),
 	  m_cachedRootIndex(0), m_cachedMaxDistance(0), m_cachedSortedCodes(0), m_cachedLeafCount(0),
-	  m_cachedLeafRangeCount(0), m_leafRangeCaching(true)
+	  m_residentLeafToBody(0), m_cachedLeafRangeCount(0), m_leafRangeCaching(true)
 {
 }
 
@@ -78,7 +81,10 @@ b3IrrlichtLbvh::~b3IrrlichtLbvh()
 	if (m_largeIndexBuffer) m_largeIndexBuffer->drop();
 	if (m_largeAabbBuffer) m_largeAabbBuffer->drop();
 	if (m_leafIdentityBuffer) m_leafIdentityBuffer->drop();
+	if (m_pairSortParamBuffer) m_pairSortParamBuffer->drop();
+	if (m_pairSortInputBuffer) m_pairSortInputBuffer->drop();
 	delete m_sort;
+	delete m_pairSort;
 	delete m_dispatch;
 }
 
@@ -138,6 +144,18 @@ bool b3IrrlichtLbvh::init(irr::io::IFileSystem* fileSystem, bool doubleSingle)
 	m_sort = new b3IrrlichtRadixSort(m_driver);
 	if (!m_sort->init(fileSystem))
 		return false;
+
+	// Optional: without it the resident pair list stays in append order.
+	const irr::io::path pairSortPath = "media/shaders/B3PairSort.hlsl";
+	if (!fileSystem || fileSystem->existFile(pairSortPath))
+	{
+		m_normalisePairsMaterial = gpu->addComputeShaderFromFile(pairSortPath, "CSNormalisePairs", irr::video::ECST_CS_5_0, 0);
+		m_swapKeyValueMaterial = gpu->addComputeShaderFromFile(pairSortPath, "CSSwapKeyValue", irr::video::ECST_CS_5_0, 0);
+		if (!m_pairSort)
+			m_pairSort = new b3IrrlichtRadixSort(m_driver);
+		if (!m_pairSort->init(fileSystem))
+			m_normalisePairsMaterial = m_swapKeyValueMaterial = -1;
+	}
 
 	// Optional: without it only the std::vector entry points work.
 	if (!m_dispatch)
@@ -709,6 +727,7 @@ bool b3IrrlichtLbvh::calculateOverlappingPairs(const std::vector<b3IrrAabb>& aab
 	if (overflowed)
 		*overflowed = false;
 	pairs.clear();
+	m_sortedPairBuffer = 0;   // this path sorts on the CPU; the device list is append-ordered
 
 	if (m_pairsMaterial < 0 || aabbs.size() < 2)
 		return false;
@@ -882,7 +901,17 @@ bool b3IrrlichtLbvh::calculateOverlappingPairsResident(irr::scene::IComputeBuffe
 	// A subset drives the tree through the SAME SmallToOriginal indirection identity uses, so the
 	// build/traverse kernels are untouched - only which bodies become leaves changes.
 	const unsigned int leafCount = subset ? subsetCount : numAabbs;
+	m_sortedPairBuffer = 0;
 	if (!isResidentPathAvailable() || !aabbs || leafCount < 2 || maxPairs == 0)
+		return false;
+
+	// An AABB buffer of the other precision's stride would be traversed misaligned, silently.
+	if (!b3IrrGpu::strideMatches(aabbs, b3IrrGpu::aabbStride(m_doubleSingle)))
+		return false;
+
+	// Refuse rather than sort a truncated prefix: an unsorted tail would be nondeterministic again.
+	const bool sortPairs = m_sortResidentPairs && isResidentPairSortAvailable();
+	if (sortPairs && maxPairs > maxSortablePairs())
 		return false;
 
 	// Never assigned into m_smallIndexBuffer: that one is owned and dropped by the destructor, and
@@ -894,7 +923,10 @@ bool b3IrrlichtLbvh::calculateOverlappingPairsResident(irr::scene::IComputeBuffe
 			return false;
 		indexMap = m_smallIndexBuffer;
 	}
+	m_residentLeafToBody = indexMap;
 
+	// Emitted pair entries are ORIGINAL body indices, so this bounds the sort keys, not leafCount.
+	const unsigned int bodyIndexBound = numAabbs;
 	numAabbs = leafCount;
 
 	ensureBuffer<b3IrrAabb>(m_mergedBuffer, 1);
@@ -1004,6 +1036,86 @@ bool b3IrrlichtLbvh::calculateOverlappingPairsResident(irr::scene::IComputeBuffe
 
 	m_driver->copyStructureCount(m_pairCountBuffer, 0, m_pairBuffer);
 	m_driver->computeBarrier(m_pairBuffer);
+
+	if (sortPairs && !sortResidentPairs(maxPairs, bodyIndexBound))
+		return false;
+	return true;
+}
+
+bool b3IrrlichtLbvh::isResidentPairSortAvailable() const
+{
+	return m_pairSort && m_normalisePairsMaterial >= 0 && m_swapKeyValueMaterial >= 0;
+}
+
+unsigned int b3IrrlichtLbvh::maxSortablePairs()
+{
+	return b3IrrlichtRadixSort::maxElements();
+}
+
+bool b3IrrlichtLbvh::sortResidentPairs(unsigned int maxPairs, unsigned int numBodies)
+{
+	m_sortedPairBuffer = 0;
+	if (!isResidentPairSortAvailable() || !m_pairBuffer || !m_pairCountBuffer || maxPairs == 0)
+		return false;
+
+	// Enough bits for the largest body index; every higher radix pass would be a no-op.
+	unsigned int keyBits = 1;
+	while (keyBits < 32 && (1u << keyBits) < numBodies)
+		++keyBits;
+
+	ensureBuffer<IrrUint2>(m_pairSortInputBuffer, maxPairs);
+	ensureBuffer<LbvhParams>(m_pairSortParamBuffer, 1);
+	if (!m_pairSortInputBuffer || !m_pairSortParamBuffer)
+		return false;
+
+	// PairSortParams in B3PairSort.hlsl: capacity first, same 16-byte shape as LbvhParams.
+	LbvhParams params;
+	params.numAabbs = maxPairs;
+	params.pad0 = params.pad1 = params.pad2 = 0;
+	memcpy(m_pairSortParamBuffer->getBufferPointer(), &params, sizeof(params));
+	m_pairSortParamBuffer->setDirty();
+
+	const irr::u32 groups = (maxPairs + 127) / 128;
+	irr::video::SMaterial mat;
+
+	// 1) (query, other) -> (key = high, value = low)
+	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_normalisePairsMaterial;
+	m_driver->setMaterial(mat);
+	m_driver->bindComputeBuffer(0, m_pairSortParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(1, m_pairBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(0, m_pairCountBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->bindComputeBuffer(1, m_pairSortInputBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(groups, 1, 1));
+	m_driver->unbindComputeResources();
+	m_driver->computeBarrier(m_pairSortInputBuffer);
+
+	// 2) stable pass on the high index (least significant key first)
+	irr::scene::IComputeBuffer* byHigh = 0;
+	if (!m_pairSort->executeResidentCounted(m_pairSortInputBuffer, maxPairs, m_pairCountBuffer,
+											keyBits, &byHigh) || !byHigh)
+		return false;
+	m_driver->computeBarrier(byHigh);
+
+	// 3) re-key on the low index. The sort never writes its input, so its own result is a safe
+	//    source and the input buffer is free to take the swap.
+	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_swapKeyValueMaterial;
+	m_driver->setMaterial(mat);
+	m_driver->bindComputeBuffer(0, m_pairSortParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(1, byHigh, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(0, m_pairCountBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->bindComputeBuffer(1, m_pairSortInputBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>(groups, 1, 1));
+	m_driver->unbindComputeResources();
+	m_driver->computeBarrier(m_pairSortInputBuffer);
+
+	// 4) stable pass on the low index -> (low, high) in lexicographic order
+	irr::scene::IComputeBuffer* byLow = 0;
+	if (!m_pairSort->executeResidentCounted(m_pairSortInputBuffer, maxPairs, m_pairCountBuffer,
+											keyBits, &byLow) || !byLow)
+		return false;
+	m_driver->computeBarrier(byLow);
+
+	m_sortedPairBuffer = byLow;
 	return true;
 }
 

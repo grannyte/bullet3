@@ -44,8 +44,49 @@ public:
 	/// mass 0 makes the body static (invMass 0), matching Bullet's convention.
 	int registerRigidBody(const b3Vector3& position, const b3Quaternion& orientation, float mass);
 
+	/// Uniform world gravity; only used while no per-body gravity buffer is set (useUniformGravity).
 	void setGravity(const b3Vector3& gravity) { m_gravity = gravity; }
 	void setAngularDamping(float damping) { m_angularDamping = damping; }
+	/// World-default linear damping, multiplicative per step like setAngularDamping. 1 = none.
+	void setLinearDamping(float damping) { m_linearDamping = damping; }
+
+	/**
+	 * @brief Uploads per-body gravity acceleration and switches the integrator off the uniform vector.
+	 *
+	 * The integrator never computes gravity: whoever owns GravityEffect fills this, CPU or GPU twin.
+	 *
+	 * @param gravityAccel One acceleration per body (m/s^2), in body order; shorter lists read 0 past the end.
+	 * @param numBodies Bodies the buffer must cover.
+	 * @return False if the buffer could not be sized.
+	 */
+	bool uploadGravity(const std::vector<b3Vector3>& gravityAccel, unsigned int numBodies);
+
+	/**
+	 * @brief Resident form of uploadGravity: a caller-owned float4-per-body buffer, e.g. a
+	 *        GpuComputeSystem<GravityAffected> output. 0 restores the uniform vector.
+	 * @param gravityAccel Device buffer of float4 per body, xyz = acceleration.
+	 */
+	void setGravityBuffer(irr::scene::IComputeBuffer* gravityAccel) { m_externalGravityBuffer = gravityAccel; }
+
+	/**
+	 * @brief Uploads per-body damping and switches the integrator off the world defaults.
+	 * @param linear Per-body linear damping factor per step (1 = none); shorter lists read 0 (full stop) past the end.
+	 * @param angular Per-body angular damping factor per step.
+	 * @param numBodies Bodies the buffer must cover.
+	 * @return False if the buffer could not be sized.
+	 */
+	bool uploadDamping(const std::vector<float>& linear, const std::vector<float>& angular,
+					   unsigned int numBodies);
+
+	/// Drops per-body gravity/damping again, so the uniform params apply to every body.
+	void clearPerBodyOverrides();
+
+	/// The per-body gravity buffer in effect (external wins), or 0 while uniform gravity applies.
+	/// Actuators bind the same buffer so "down" agrees with the integrator by construction.
+	irr::scene::IComputeBuffer* getGravityBuffer() const
+	{
+		return m_externalGravityBuffer ? m_externalGravityBuffer : m_gravityBuffer;
+	}
 
 	void setLinearVelocity(int bodyIndex, const b3Vector3& velocity);
 	void setAngularVelocity(int bodyIndex, const b3Vector3& velocity);
@@ -149,12 +190,17 @@ private:
 	irr::scene::IComputeBuffer* m_paramBuffer;
 	irr::scene::IComputeBuffer* m_transformBuffer;
 	irr::scene::IComputeBuffer* m_renderTransformBuffer;
+	/// Owned per-body gravity from uploadGravity; m_externalGravityBuffer (not owned) wins when set.
+	irr::scene::IComputeBuffer* m_gravityBuffer;
+	irr::scene::IComputeBuffer* m_externalGravityBuffer;
+	irr::scene::IComputeBuffer* m_dampingBuffer;
 	int m_integrateMaterial;
 	int m_integratePackMaterial;
 
 	std::vector<b3RigidBodyData> m_cpuBodies;
 	b3Vector3 m_gravity;
 	float m_angularDamping;
+	float m_linearDamping;
 };
 
 #endif  //B3_GPU_IRRLICHT_RIGIDBODY_PIPELINE_H

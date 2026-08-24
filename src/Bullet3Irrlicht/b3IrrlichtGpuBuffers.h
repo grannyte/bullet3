@@ -102,6 +102,28 @@ struct b3IrrBodyTransformDS
 	float orientation[4];   // xyzw
 };
 
+static_assert(sizeof(b3IrrRigidBodyDataDS) == 96, "b3IrrRigidBodyDataDS must match the OS_DS HLSL b3RigidBodyData stride");
+
+/// Element stride of a body buffer in each precision mode (b3RigidBodyData / b3IrrRigidBodyDataDS).
+inline unsigned int bodyStride(bool doubleSingle) { return doubleSingle ? 96u : 80u; }
+/// Element stride of a world-AABB buffer in each precision mode (b3IrrAabb / b3IrrAabbDS).
+inline unsigned int aabbStride(bool doubleSingle) { return doubleSingle ? 64u : 32u; }
+
+/**
+ * @brief Whether a device buffer carries the stride a stage's kernels index by.
+ *
+ * A df64 buffer read through f32 kernels (or the reverse) misindexes every element silently,
+ * so resident entry points refuse on a mismatch instead of dispatching.
+ *
+ * @param buffer Buffer about to be bound.
+ * @param expectedStride Stride the kernel set was compiled for.
+ * @return True when the buffer exists and its stride matches.
+ */
+inline bool strideMatches(const irr::scene::IComputeBuffer* buffer, unsigned int expectedStride)
+{
+	return buffer && buffer->getStructureStride() == expectedStride;
+}
+
 /**
  * @brief Splits a hardware double into the (hi, lo) float pair the df64 kernels consume.
  * @param value Value to split.
