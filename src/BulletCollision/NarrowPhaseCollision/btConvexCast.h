@@ -23,7 +23,7 @@ class btMinkowskiSumShape;
 #include "LinearMath/btIDebugDraw.h"
 
 #ifdef BT_USE_DOUBLE_PRECISION
-#define MAX_CONVEX_CAST_ITERATIONS 64
+#define MAX_CONVEX_CAST_ITERATIONS 32*32
 #define MAX_CONVEX_CAST_EPSILON (SIMD_EPSILON * 10)
 #else
 #define MAX_CONVEX_CAST_ITERATIONS 32

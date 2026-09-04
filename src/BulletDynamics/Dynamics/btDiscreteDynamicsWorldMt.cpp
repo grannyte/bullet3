@@ -54,7 +54,10 @@ btConstraintSolverPoolMt::ThreadSolver* btConstraintSolverPoolMt::getAndLockThre
 {
 	int i = 0;
 #if BT_THREADSAFE
-	i = btGetCurrentThreadIndex() % m_solvers.size();
+	// just a starting hint to spread callers out -- the tryLock/probe below is what actually
+	// guarantees exclusivity, so this needs no thread identity and no shared counter
+	static thread_local unsigned int sRoundRobin = 0;
+	i = (++sRoundRobin) % m_solvers.size();
 #endif  // #if BT_THREADSAFE
 	while (true)
 	{
@@ -194,7 +197,7 @@ struct UpdaterUnconstrainedMotion : public btIParallelForBody
 	btScalar timeStep;
 	btRigidBody** rigidBodies;
 
-	void forLoop(int iBegin, int iEnd) const BT_OVERRIDE
+	void forLoop(const int iBegin, const int iEnd) const BT_OVERRIDE
 	{
 		for (int i = iBegin; i < iEnd; ++i)
 		{

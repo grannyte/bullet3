@@ -799,7 +799,7 @@ struct btDbvtBenchmark
 		{
 			Node n;
 			n.leaf = leaf;
-			n.depth = dot(leaf->volume.Center(), m_axis);
+			n.depth = dot(btQuaternion( leaf->volume.Center(), m_axis);
 		}
 		static int sortfnc(const Node& a, const Node& b)
 		{

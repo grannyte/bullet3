@@ -171,8 +171,17 @@ void btSimulationIslandManagerMt::initIslandPools()
 
 btSimulationIslandManagerMt::Island* btSimulationIslandManagerMt::getIsland(int id)
 {
-	btAssert(id >= 0);
+	// id < 0 is routine, not an error: getIslandId returns -1 for a manifold whose bodies are both
+	// static/kinematic. Only the upper bound was checked, so that indexed [-1] and handed back the
+	// allocator header as a live Island*, which callers then wrote through.
+	if (id < 0)
+		return nullptr;
 	btAssert(id < m_lookupIslandFromId.size());
+	if (id >= m_lookupIslandFromId.size())
+	{
+		printf("getIsland(%d) m_lookupIslandFromId.size()=%d , m_lookupIslandFromId.data=%p\n", id, m_lookupIslandFromId.size(), &m_lookupIslandFromId[0]);
+		return nullptr;
+	}
 	Island* island = m_lookupIslandFromId[id];
 	if (island == NULL)
 	{
@@ -399,6 +408,7 @@ void btSimulationIslandManagerMt::addBodiesToIslands(btCollisionWorld* collision
 				int i = getUnionFind().getElement(iElem).m_sz;
 				btCollisionObject* colObj = collisionObjects[i];
 				island->bodyArray.push_back(colObj);
+				colObj->setIslandTag(islandId);
 			}
 		}
 	}
@@ -455,6 +465,19 @@ void btSimulationIslandManagerMt::addConstraintsToIslands(btAlignedObjectArray<b
 		if (constraint->isEnabled())
 		{
 			int islandId = btGetConstraintIslandId1(constraint);
+			if (islandId < 0 || islandId >= m_lookupIslandFromId.size())
+			{
+				const btRigidBody& a = constraint->getRigidBodyA();
+				const btRigidBody& b = constraint->getRigidBodyB();
+				printf("bad constraint island id=%d lookup=%d unionFindElems=%d numConstraints=%d\n"
+					"  A userIndex=%d islandTag=%d invMass=%f flags=0x%x worldArrayIndex=%d activation=%d\n"
+					"  B userIndex=%d islandTag=%d invMass=%f flags=0x%x worldArrayIndex=%d activation=%d\n",
+					islandId, m_lookupIslandFromId.size(), getUnionFind().getNumElements(), constraints.size(),
+					a.getUserIndex(), a.getIslandTag(), a.getInvMass(), a.getCollisionFlags(),
+					a.getWorldArrayIndex(), a.getActivationState(),
+					b.getUserIndex(), b.getIslandTag(), b.getInvMass(), b.getCollisionFlags(),
+					b.getWorldArrayIndex(), b.getActivationState());
+			}
 			// if island is not sleeping,
 			if (Island* island = getIsland(islandId))
 			{
@@ -562,7 +585,7 @@ struct UpdateIslandDispatcher : public btIParallelForBody
 	{
 	}
 
-	void forLoop(int iBegin, int iEnd) const BT_OVERRIDE
+	void forLoop(const int iBegin, const int iEnd) const BT_OVERRIDE
 	{
 		btConstraintSolver* solver = m_solverParams.m_solverPool;
 		for (int i = iBegin; i < iEnd; ++i)
@@ -634,6 +657,7 @@ void btSimulationIslandManagerMt::buildAndProcessIslands(btDispatcher* dispatche
 
 	if (!getSplitIslands())
 	{
+		//printf("btSimulationIslandManagerMt::buildAndProcessIslands: getSplitIslands() is false\n");
 		btPersistentManifold** manifolds = dispatcher->getInternalManifoldPointer();
 		int maxNumManifolds = dispatcher->getNumManifolds();
 
@@ -675,6 +699,7 @@ void btSimulationIslandManagerMt::buildAndProcessIslands(btDispatcher* dispatche
 	}
 	else
 	{
+		//printf("btSimulationIslandManagerMt::buildAndProcessIslands: getSplitIslands() is true\n");
 		initIslandPools();
 
 		//traverse the simulation islands, and call the solver, unless all objects are sleeping/deactivated

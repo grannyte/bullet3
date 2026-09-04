@@ -123,7 +123,7 @@ public:
 #if defined (B3_USE_SSE) || defined (B3_USE_AVX) || defined(B3_USE_NEON) // _WIN32 || ARM
         union {
             b3SimdFloat4      mVec128;
-            float	m_floats[4];
+            b3Scalar	m_floats[4];
 			struct {float x,y,z,w;};
 
         };
@@ -247,7 +247,8 @@ public:
 		vd = _mm_add_ss(vd, z);
 		return _mm_cvtss_f32(vd);
 #elif defined (B3_USE_SSE_IN_API) && defined (B3_USE_AVX)
-		__m256d xy = _mm256_mul_pd(mVec128, v.mVec128);
+		//mask w out: hadd would otherwise fold it into the 3-component dot
+		__m256d xy = _mm256_and_pd(_mm256_mul_pd(mVec128, v.mVec128), b3vFFF0fMask);
 		__m256d temp = _mm256_hadd_pd(xy, xy);
 		__m128d hi128 = _mm256_extractf128_pd(temp, 1);
 		__m128d dotproduct = _mm_add_pd(_mm256_castpd256_pd128(temp), hi128);
@@ -339,13 +340,14 @@ public:
 		return *this;
 
 #elif defined(B3_USE_SSE_IN_API) && defined (B3_USE_AVX)		
-		__m256d xy = _mm256_mul_pd(mVec128, mVec128);
+		//mask w out of the length, and off the result: the SSE path zeroes it too
+		__m256d xy = _mm256_and_pd(_mm256_mul_pd(mVec128, mVec128), b3vFFF0fMask);
 		__m256d temp = _mm256_hadd_pd(xy, xy);
 		__m128d hi128 = _mm256_extractf128_pd(temp, 1);
 		__m128d lengthsq_2 = _mm_add_pd(_mm256_castpd256_pd128(temp), hi128);
 		__m128d length_2 = _mm_sqrt_pd(lengthsq_2);
 		__m256d length_4 = _mm256_broadcastsd_pd(length_2);
-		mVec128 = _mm256_div_pd(mVec128, length_4);
+		mVec128 = _mm256_and_pd(_mm256_div_pd(mVec128, length_4), b3vFFF0fMask);
 
 		return *this;
 #else

@@ -41,6 +41,9 @@ static btFreeFunc *sFreeFunc = btFreeDefault;
 #include <malloc.h>
 static void *btAlignedAllocDefault(size_t size, int alignment)
 {
+	//call sites still pass a hardcoded 16; AVX types need 32
+	if (alignment < BT_DEFAULT_ALIGNMENT)
+		alignment = BT_DEFAULT_ALIGNMENT;
 	return _aligned_malloc(size, (size_t)alignment);
 }
 
@@ -66,6 +69,9 @@ static inline void *btAlignedAllocDefault(size_t size, int alignment)
 {
 	void *ret;
 	char *real;
+	//call sites still pass a hardcoded 16; AVX types need 32
+	if (alignment < BT_DEFAULT_ALIGNMENT)
+		alignment = BT_DEFAULT_ALIGNMENT;
 	real = (char *)sAllocFunc(size + sizeof(void *) + (alignment - 1));
 	if (real)
 	{

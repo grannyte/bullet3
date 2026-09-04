@@ -18,13 +18,14 @@ subject to the following restrictions:
 #include "btScalar.h"
 #include "btAlignedAllocator.h"
 #include "btThreads.h"
+#include <atomic>
 
 ///The btPoolAllocator class allows to efficiently allocate a large pool of objects, instead of dynamically allocating them separately.
 class btPoolAllocator
 {
 	int m_elemSize;
 	int m_maxElements;
-	int m_freeCount;
+	std::atomic_int m_freeCount;
 	void* m_firstFree;
 	unsigned char* m_pool;
 	btSpinMutex m_mutex;  // only used if BT_THREADSAFE
@@ -38,7 +39,7 @@ public:
 
 		unsigned char* p = m_pool;
 		m_firstFree = p;
-		m_freeCount = m_maxElements;
+		m_freeCount =m_maxElements;
 		int count = m_maxElements;
 		while (--count)
 		{
@@ -72,22 +73,24 @@ public:
 	{
 		// release mode fix
 		(void)size;
-		btMutexLock(&m_mutex);
 		btAssert(!size || size <= m_elemSize);
 		//btAssert(m_freeCount>0);  // should return null if all full
+		btMutexLock(&m_mutex);
 		void* result = m_firstFree;
 		if (NULL != m_firstFree)
 		{
 			m_firstFree = *(void**)m_firstFree;
-			--m_freeCount;
 		}
 		btMutexUnlock(&m_mutex);
+		if(NULL !=result)
+			--m_freeCount;
 		return result;
 	}
 
 	bool validPtr(void* ptr)
 	{
 		if (ptr)
+
 		{
 			if (((unsigned char*)ptr >= m_pool && (unsigned char*)ptr < m_pool + m_maxElements * m_elemSize))
 			{
@@ -106,8 +109,8 @@ public:
 			btMutexLock(&m_mutex);
 			*(void**)ptr = m_firstFree;
 			m_firstFree = ptr;
-			++m_freeCount;
 			btMutexUnlock(&m_mutex);
+			++m_freeCount;
 		}
 	}
 

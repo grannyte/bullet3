@@ -54,7 +54,7 @@ static inline btDbvtNode* buildTreeBottomUp(btAlignedObjectArray<btDbvtNode*>& l
 				int n = adj[i][j];
 				if (!marked[adj[i][j]])
 				{
-					btDbvtNode* node = new (btAlignedAlloc(sizeof(btDbvtNode), 16)) btDbvtNode();
+					btDbvtNode* node = new  btDbvtNode();
 					node->parent = NULL;
 					node->childs[0] = leafNodes[i];
 					node->childs[1] = leafNodes[n];
@@ -2652,7 +2652,7 @@ void btSoftBody::initializeFaceTree()
 		Face& f = m_faces[i];
 		ATTRIBUTE_ALIGNED16(btDbvtVolume)
 		vol = VolumeOf(f, 0);
-		btDbvtNode* node = new (btAlignedAlloc(sizeof(btDbvtNode), 16)) btDbvtNode();
+		btDbvtNode* node = new btDbvtNode();
 		node->parent = NULL;
 		node->data = &f;
 		node->childs[1] = 0;
@@ -2705,7 +2705,7 @@ void btSoftBody::rebuildNodeTree()
 		Node& n = m_nodes[i];
 		ATTRIBUTE_ALIGNED16(btDbvtVolume)
 		vol = btDbvtVolume::FromCR(n.m_x, 0);
-		btDbvtNode* node = new (btAlignedAlloc(sizeof(btDbvtNode), 16)) btDbvtNode();
+		btDbvtNode* node = new btDbvtNode();
 		node->parent = NULL;
 		node->data = &n;
 		node->childs[1] = 0;

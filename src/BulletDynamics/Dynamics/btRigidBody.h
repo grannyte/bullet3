@@ -274,6 +274,8 @@ public:
 
 	void applyCentralForce(const btVector3& force)
 	{
+		if (isnan(force.length2()) || isnan(m_linearFactor.length2()) || isnan(m_inverseMass)|| isnan(m_totalForce.length2()))
+			__debugbreak();
 		m_totalForce += force * m_linearFactor;
 	}
 

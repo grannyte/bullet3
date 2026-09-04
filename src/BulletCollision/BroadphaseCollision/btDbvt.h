@@ -634,21 +634,14 @@ DBVT_INLINE bool Intersect(const btDbvtAabbMm& a,
 #if	DBVT_INT0_IMPL == DBVT_IMPL_SSE
 	const __m128	rt(_mm_or_ps(_mm_cmplt_ps(_mm_load_ps(b.mx), _mm_load_ps(a.mi)),
 		_mm_cmplt_ps(_mm_load_ps(a.mx), _mm_load_ps(b.mi))));
-#if defined (_WIN32)
-	const __int32* pu((const __int32*)& rt);
-#else
-	const int* pu((const int*)& rt);
-#endif
-	return((pu[0] | pu[1] | pu[2]) == 0);
+
+	int mask = _mm_movemask_ps(rt);
+	return (mask & 7) == 0;  //are first 3 slots all 0?
 #elif	DBVT_INT0_IMPL == DBVT_IMPL_AVX
 	const __m256d	rt(_mm256_or_pd(_mm256_cmp_pd(_mm256_load_pd(b.mx), _mm256_load_pd(a.mi), _CMP_LT_OS),
 		_mm256_cmp_pd(_mm256_load_pd(a.mx), _mm256_load_pd(b.mi), _CMP_LT_OS)));
-#if defined (_WIN32)
-	const __int64* pu((const __int64*)& rt);
-#else
-	const long long int* pu((const long long int*)& rt);
-#endif
-	return((pu[0] | pu[1] | pu[2]) == 0);
+	__int64  mask = _mm256_movemask_pd(rt);
+return (mask & 7) == 0;  //are first 3 slots all 0?
 #else
 	return(	(a.mi.x()<=b.mx.x())&&
 		(a.mx.x()>=b.mi.x())&&
@@ -780,7 +773,9 @@ DBVT_INLINE int Select(const btDbvtAabbMm& o,
 	__m256d doa_abs = _mm256_and_pd(doa, btvAbsfMask);
 	__m256d dob_abs = _mm256_and_pd(dob, btvAbsfMask);
 
-	return (hsum_double_avx(doa_abs) < hsum_double_avx(dob_abs) ? 0 : 1);
+	//mask w out so this matches the generic Proximity it stands in for
+	return (hsum_double_avx(_mm256_and_pd(doa_abs, btvFFF0fMask)) <
+			hsum_double_avx(_mm256_and_pd(dob_abs, btvFFF0fMask)) ? 0 : 1);
 #else
 	return (Proximity(o, a) < Proximity(o, b) ? 0 : 1);
 #endif

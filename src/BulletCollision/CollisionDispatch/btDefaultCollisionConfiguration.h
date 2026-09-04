@@ -17,6 +17,7 @@ subject to the following restrictions:
 #define BT_DEFAULT_COLLISION_CONFIGURATION
 
 #include "btCollisionConfiguration.h"
+#include "..\..\LinearMath\btScalar.h"
 class btVoronoiSimplexSolver;
 class btConvexPenetrationDepthSolver;
 
@@ -89,6 +90,8 @@ public:
 
 	virtual btPoolAllocator* getCollisionAlgorithmPool()
 	{
+		// assert m_collisionAlgorithmPool != 0;
+		btAssert(m_collisionAlgorithmPool);
 		return m_collisionAlgorithmPool;
 	}
 

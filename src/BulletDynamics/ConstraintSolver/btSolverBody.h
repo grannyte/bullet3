@@ -225,6 +225,8 @@ ATTRIBUTE_ALIGNED_DEFAULT (struct)	btSolverBody
 	{
 		if (m_originalBody)
 		{
+			if (isnan(linearComponent.length2()) || isnan(angularComponent.length2()) || isnan(m_deltaLinearVelocity.length2()) || isnan(m_deltaAngularVelocity.length2()))
+				__debugbreak();
 			m_deltaLinearVelocity += linearComponent * impulseMagnitude * m_linearFactor;
 			m_deltaAngularVelocity += angularComponent * (impulseMagnitude * m_angularFactor);
 		}
@@ -234,6 +236,8 @@ ATTRIBUTE_ALIGNED_DEFAULT (struct)	btSolverBody
 	{
 		if (m_originalBody)
 		{
+			if (isnan(linearComponent.length2()) || isnan(angularComponent.length2()) || isnan(m_deltaLinearVelocity.length2()) || isnan(m_deltaAngularVelocity.length2()))
+				__debugbreak();
 			m_pushVelocity += linearComponent * impulseMagnitude * m_linearFactor;
 			m_turnVelocity += angularComponent * (impulseMagnitude * m_angularFactor);
 		}
@@ -312,6 +316,11 @@ ATTRIBUTE_ALIGNED_DEFAULT (struct)	btSolverBody
 	{
 		if (m_originalBody)
 		{
+			if (isnan(linearComponent.length2()) || isnan(angularComponent.length2()) || isnan(m_deltaLinearVelocity.length2()) || isnan(m_deltaAngularVelocity.length2()))
+			{
+				printf("internalApplyImpulse: isnan linearComponent.length2 = %f angularComponent.length2 = %f m_deltaLinearVelocity.length2 = %f m_deltaAngularVelocity.length2 = %f\n", linearComponent.length2(), angularComponent.length2(), m_deltaLinearVelocity.length2(), m_deltaAngularVelocity.length2());
+				__debugbreak();
+			}
 			m_deltaLinearVelocity += linearComponent * impulseMagnitude * m_linearFactor;
 			m_deltaAngularVelocity += angularComponent * (impulseMagnitude * m_angularFactor);
 		}
@@ -333,6 +342,8 @@ ATTRIBUTE_ALIGNED_DEFAULT (struct)	btSolverBody
 		(void)timeStep;
 		if (m_originalBody)
 		{
+			if (isnan(m_linearVelocity.length2()) || isnan(m_angularVelocity.length2()) || isnan(m_deltaLinearVelocity.length2()) || isnan(m_deltaAngularVelocity.length2()))
+				__debugbreak();
 			m_linearVelocity += m_deltaLinearVelocity;
 			m_angularVelocity += m_deltaAngularVelocity;
 

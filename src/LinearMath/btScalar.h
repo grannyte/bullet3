@@ -138,9 +138,13 @@ inline int btIsDoublePrecision()
 
 #elif (defined (_WIN32) && (_MSC_VER) && _MSC_VER >= 1400) && (defined (BT_USE_DOUBLE_PRECISION))
 			#if _MSC_VER>1400
-				#define BT_USE_SIMD_VECTOR3
+			//	#define BT_USE_SIMD_VECTOR3
 			#endif
 
+			// Routes btVector3/btQuaternion operators through AVX intrinsics. Layout is unchanged
+			// (BT_USE_AVX already makes btVector3 32 bytes/32-aligned) but the loads become ALIGNED,
+			// so any btVector3 that ends up on a non-32-byte boundary now faults instead of working.
+			#define BT_USE_SSE_IN_API
 			#define BT_USE_AVX
 			#ifdef BT_USE_AVX
 
@@ -458,7 +462,7 @@ inline int btIsDoublePrecision()
 		return _mm256_mul_pd(A, B);
 	}
 	#endif  //BT_NO_SIMD_OPERATOR_OVERLOADS
-
+	
 	#define btCastdTo256i(a) (_mm256_castpd_si256(a))
 	//#define btCastfTo128d(a) (_mm_castps_pd(a))
 	#define btCastiTo256d(a) (_mm256_castsi256_pd(a))
@@ -524,12 +528,19 @@ inline int btIsDoublePrecision()
 		(float32x4_t) { r0, r1, r2, r3 }
 #endif//BT_USE_NEON
 
-#define BT_DECLARE_ALIGNED_ALLOCATOR()                                                                     \
-	SIMD_FORCE_INLINE void *operator new(size_t sizeInBytes) { return btAlignedAlloc(sizeInBytes, 16); }   \
-	SIMD_FORCE_INLINE void operator delete(void *ptr) { btAlignedFree(ptr); }                              \
-	SIMD_FORCE_INLINE void *operator new(size_t, void *ptr) { return ptr; }                                \
-	SIMD_FORCE_INLINE void operator delete(void *, void *) {}                                              \
-	SIMD_FORCE_INLINE void *operator new[](size_t sizeInBytes) { return btAlignedAlloc(sizeInBytes, 16); } \
+//must match ATTRIBUTE_ALIGNED_DEFAULT: AVX widens btVector3 to 32 bytes
+#ifdef BT_USE_AVX
+#define BT_DEFAULT_ALIGNMENT 32
+#else
+#define BT_DEFAULT_ALIGNMENT 16
+#endif
+
+#define BT_DECLARE_ALIGNED_ALLOCATOR()                                                                                      \
+	SIMD_FORCE_INLINE void *operator new(size_t sizeInBytes) { return btAlignedAlloc(sizeInBytes, BT_DEFAULT_ALIGNMENT); }   \
+	SIMD_FORCE_INLINE void operator delete(void *ptr) { btAlignedFree(ptr); }                                               \
+	SIMD_FORCE_INLINE void *operator new(size_t, void *ptr) { return ptr; }                                                 \
+	SIMD_FORCE_INLINE void operator delete(void *, void *) {}                                                               \
+	SIMD_FORCE_INLINE void *operator new[](size_t sizeInBytes) { return btAlignedAlloc(sizeInBytes, BT_DEFAULT_ALIGNMENT); } \
 	SIMD_FORCE_INLINE void operator delete[](void *ptr) { btAlignedFree(ptr); }                            \
 	SIMD_FORCE_INLINE void *operator new[](size_t, void *ptr) { return ptr; }                              \
 	SIMD_FORCE_INLINE void operator delete[](void *, void *) {}

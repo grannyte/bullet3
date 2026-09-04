@@ -99,7 +99,7 @@ protected:
 
 	int m_userIndex2;
 
-	int m_userIndex;
+	__int64 m_userIndex;
 
 	int m_userIndex3;
 
@@ -529,7 +529,7 @@ public:
 		return m_userObjectPointer;
 	}
 
-	int getUserIndex() const
+	__int64 getUserIndex() const
 	{
 		return m_userIndex;
 	}
@@ -551,7 +551,7 @@ public:
 	}
 
 	///users can point to their objects, userPointer is not used by Bullet
-	void setUserIndex(int index)
+	void setUserIndex(__int64 index)
 	{
 		m_userIndex = index;
 	}

@@ -403,9 +403,14 @@ void btGeneric6DofSpring2Constraint::calculateAngleInfo()
 			btAssert(false);
 	}
 
-	m_calculatedAxis[0].normalize();
-	m_calculatedAxis[1].normalize();
-	m_calculatedAxis[2].normalize();
+	// At gimbal lock the cross products above collapse to zero and normalize() divides by it,
+	// NaNing every angular row. Frame A's own basis is the limit they approach.
+	for (int i = 0; i < 3; i++)
+	{
+		if (m_calculatedAxis[i].fuzzyZero())
+			m_calculatedAxis[i] = m_calculatedTransformA.getBasis().getColumn(i);
+		m_calculatedAxis[i].normalize();
+	}
 }
 
 void btGeneric6DofSpring2Constraint::calculateTransforms()

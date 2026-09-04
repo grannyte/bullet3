@@ -278,7 +278,8 @@ public:
 		vd = _mm_add_ss(vd, z);
 		return _mm_cvtss_f32(vd);
 #elif defined BT_USE_SIMD_VECTOR3 && defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX)
-		__m256d xy = _mm256_mul_pd(mVec128, v.mVec128);
+		//mask w out: hadd would otherwise fold it into the 3-component dot
+		__m256d xy = _mm256_and_pd(_mm256_mul_pd(mVec128, v.mVec128), btvFFF0fMask);
 		__m256d temp = _mm256_hadd_pd(xy, xy);
 		__m128d hi128 = _mm256_extractf128_pd(temp, 1);
 		__m128d dotproduct = _mm_add_pd(_mm256_castpd256_pd128(temp), hi128);
@@ -388,13 +389,14 @@ public:
 		return *this;
 
 #elif defined(BT_USE_SSE_IN_API) && defined (BT_USE_AVX)		
-		__m256d xy = _mm256_mul_pd(mVec128, mVec128);
+		//mask w out of the length, and off the result: the SSE path zeroes it too
+		__m256d xy = _mm256_and_pd(_mm256_mul_pd(mVec128, mVec128), btvFFF0fMask);
 		__m256d temp = _mm256_hadd_pd(xy, xy);
 		__m128d hi128 = _mm256_extractf128_pd(temp, 1);
 		__m128d lengthsq_2 = _mm_add_pd(_mm256_castpd256_pd128(temp), hi128);
 		__m128d length_2 = _mm_sqrt_pd(lengthsq_2);
 		__m256d length_4 = _mm256_broadcastsd_pd(length_2);
-		mVec128 = _mm256_div_pd(mVec128, length_4);
+		mVec128 = _mm256_and_pd(_mm256_div_pd(mVec128, length_4), btvFFF0fMask);
 
 		return *this;
 
@@ -841,9 +843,11 @@ public:
 
 #elif defined BT_USE_SIMD_VECTOR3 && defined (BT_USE_SSE_IN_API) && defined (BT_USE_AVX)
         
-		__m256d xy0 = _mm256_mul_pd(v0.mVec128, this->mVec128);
-		__m256d xy1 = _mm256_mul_pd(v1.mVec128, this->mVec128);
-		__m256d xy2 = _mm256_mul_pd(v2.mVec128, this->mVec128);
+		//mask w out of each product, as the SSE (btvxyzMaskf) and NEON (xyzMask) paths do -- this
+		//is a 3-component dot per row, and a stray w corrupts every btMatrix3x3 * btVector3
+		__m256d xy0 = _mm256_and_pd(_mm256_mul_pd(v0.mVec128, this->mVec128), btvFFF0fMask);
+		__m256d xy1 = _mm256_and_pd(_mm256_mul_pd(v1.mVec128, this->mVec128), btvFFF0fMask);
+		__m256d xy2 = _mm256_and_pd(_mm256_mul_pd(v2.mVec128, this->mVec128), btvFFF0fMask);
 		__m256d xy3 = btvZeroMask;// _mm256_mul_pd(x[3], y[3]);
 
 		// low to high: xy00+xy01 xy10+xy11 xy02+xy03 xy12+xy13

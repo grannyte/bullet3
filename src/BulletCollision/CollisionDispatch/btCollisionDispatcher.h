@@ -43,7 +43,6 @@ class btCollisionDispatcher : public btDispatcher
 {
 protected:
 	int m_dispatcherFlags;
-
 	btAlignedObjectArray<btPersistentManifold*> m_manifoldsPtr;
 
 	btNearCallback m_nearCallback;

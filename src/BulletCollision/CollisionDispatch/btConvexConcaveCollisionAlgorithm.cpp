@@ -14,6 +14,12 @@ subject to the following restrictions:
 */
 
 #include "btConvexConcaveCollisionAlgorithm.h"
+
+// Per-triangle early-out in the concave path (upstream ships this as #if 1). Defined here rather
+// than in the .vcxproj so it cannot end up set for some configurations and not others; comment out
+// this line to bisect it back off.
+#define BT_ENABLE_CONVEX_CONCAVE_EARLY_OUT
+
 #include "LinearMath/btQuickprof.h"
 #include "BulletCollision/CollisionDispatch/btCollisionObject.h"
 #include "BulletCollision/CollisionShapes/btMultiSphereShape.h"
