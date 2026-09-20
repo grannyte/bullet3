@@ -1521,7 +1521,9 @@ void VHACD::MergeConvexHulls(const Parameters& params)
 
 				++top_row;
 				rowIdx += p1;
-				for (size_t i = p1 + 1; i < (costSize + 1); ++i)
+				// costSize is already the post-merge hull count, so row costSize no longer exists;
+				// i < costSize+1 read one float past the end of costMatrix.
+				for (size_t i = p1 + 1; i < costSize; ++i)
 				{
 					costMatrix[rowIdx] = costMatrix[top_row++];
 					rowIdx += i;
