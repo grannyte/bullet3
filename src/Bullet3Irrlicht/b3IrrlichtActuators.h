@@ -7,6 +7,10 @@
 
 #include <vector>
 
+/// IMPULSE row: thrustLocal.xyz central impulse (N*s), torqueLocal.xyz torque impulse (N*m*s), both
+/// in the world frame, applied every step. One writer per body; the caller enforces it.
+#define B3_IRR_ACTUATOR_IMPULSE 7
+
 namespace irr
 {
 namespace video
@@ -108,6 +112,32 @@ public:
 	/// internal buffer. The slot order is getRayBuffer()'s.
 	void setRayHitBuffer(irr::scene::IComputeBuffer* hits) { m_externalHitBuffer = hits; }
 
+	/// Whether the planet ray kernel compiled (optional: it needs the host game's planet shaders).
+	bool isPlanetRayAvailable() const { return m_planetRayMaterial >= 0; }
+
+	/**
+	 * @brief Answers every row's rays against a planet's terrain too, in stepResident.
+	 * @param planets b3IrrlichtNarrowphase::getPlanetBuffer(); entry 0 is used. 0 turns planet rays off.
+	 * @param planetBodyIndex The planet body's index in the resident body buffer.
+	 */
+	void setPlanet(irr::scene::IComputeBuffer* planets, int planetBodyIndex)
+	{
+		m_planetBuffer = planets;
+		m_planetBody = planetBodyIndex;
+	}
+
+	/// noise2.hlsl's five constants for the planet ray kernel; same values as the narrowphase's.
+	void setPlanetNoiseParams(float mTimer, float plates, float rivers, float atmosphereDensity, float texsize);
+
+	/**
+	 * @brief Planet ray provider: each support/wheel ray against the terrain plane the contacts use.
+	 * @param bodies Device-resident bodies.
+	 * @param numBodies Bodies in that buffer.
+	 * @param merge Keep a nearer hit an earlier provider already wrote; false overwrites every slot.
+	 * @return False if the kernel is unavailable, no planet is set or buildRaysResident never ran.
+	 */
+	bool castRaysPlanetResident(irr::scene::IComputeBuffer* bodies, unsigned int numBodies, bool merge);
+
 	/**
 	 * @brief Applies every row and folds the accumulated deltas into the bodies. Run BEFORE the
 	 *        contact solve so the impulses are resolved against this step's contacts.
@@ -121,7 +151,7 @@ public:
 					   irr::scene::IComputeBuffer* sleepState = 0);
 
 	/**
-	 * @brief buildRays -> brute-force cast (when worldAabbs is given) -> apply, in one call.
+	 * @brief buildRays -> brute-force cast (when worldAabbs is given) -> planet cast (when set) -> apply.
 	 * @param bodies Device-resident bodies.
 	 * @param numBodies Bodies in that buffer.
 	 * @param deltaTime Timestep.
@@ -179,6 +209,15 @@ public:
 	 * @return An enabled row.
 	 */
 	static b3IrrActuator makeRotationWheel(int body, const float* torqueLocal, float throttle);
+
+	/**
+	 * @brief Impulse row: a central and a torque impulse on its own body, every step.
+	 * @param body Body index.
+	 * @param linearImpulse N*s in the world frame, 3 floats.
+	 * @param torqueImpulse N*m*s in the world frame, 3 floats.
+	 * @return An enabled row.
+	 */
+	static b3IrrActuator makeImpulse(int body, const float* linearImpulse, const float* torqueImpulse);
 
 	/**
 	 * @brief Hover or walker row from the hull's local AABB, as HoverWalkerDrive's constructor.
@@ -271,6 +310,11 @@ private:
 	int m_bruteForceMaterial;
 	int m_applyMaterial;
 	int m_foldMaterial;
+	int m_planetRayMaterial;
+	class b3IrrPlanetNoiseParams* m_planetNoiseParams;
+	irr::scene::IComputeBuffer* m_planetBuffer;
+	irr::scene::IComputeBuffer* m_planetParamBuffer;
+	int m_planetBody;
 
 	irr::scene::IComputeBuffer* m_paramBuffer;
 	irr::scene::IComputeBuffer* m_actuatorBuffer;

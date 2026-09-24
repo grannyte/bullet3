@@ -457,8 +457,10 @@ bool b3IrrlichtJointSolver::uploadInvInertia(const std::vector<float>& invInerti
 	return true;
 }
 
+/// One solve+apply pass per iteration, then the breaking/finish pass; sleepState may be 0.
 void b3IrrlichtJointSolver::runIterations(irr::scene::IComputeBuffer* bodies, unsigned int numBodies,
-										  unsigned int numJoints, int iterations)
+										  unsigned int numJoints, int iterations,
+										  irr::scene::IComputeBuffer* sleepState)
 {
 	const irr::u32 jointGroups = (numJoints + 63) / 64;
 	const irr::u32 bodyGroups = (numBodies + 63) / 64;
@@ -472,6 +474,8 @@ void b3IrrlichtJointSolver::runIterations(irr::scene::IComputeBuffer* bodies, un
 		m_driver->bindComputeBuffer(1, m_jointBuffer, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(2, m_inertiaBuffer, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(3, m_scaleBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		if (sleepState)
+			m_driver->bindComputeBuffer(4, sleepState, irr::video::EHBT_SHADER_RESOURCE);
 		m_driver->bindComputeBuffer(0, bodies, irr::video::EHBT_COMPUTE);
 		m_driver->bindComputeBuffer(1, m_deltaBuffer, irr::video::EHBT_COMPUTE);
 		m_driver->bindComputeBuffer(2, m_accumBuffer, irr::video::EHBT_COMPUTE);
@@ -498,9 +502,11 @@ void b3IrrlichtJointSolver::runIterations(irr::scene::IComputeBuffer* bodies, un
 	m_driver->unbindComputeResources();
 }
 
+/// See the header; sleepState 0 keeps every body at its real mass.
 bool b3IrrlichtJointSolver::solveJointsResident(irr::scene::IComputeBuffer* bodies,
 												unsigned int numBodies, int iterations,
-												float deltaTime, float erp)
+												float deltaTime, float erp,
+												irr::scene::IComputeBuffer* sleepState)
 {
 	if (m_solveMaterial < 0 || m_applyMaterial < 0 || m_finishMaterial < 0 || !bodies || numBodies == 0)
 		return false;
@@ -523,7 +529,7 @@ bool b3IrrlichtJointSolver::solveJointsResident(irr::scene::IComputeBuffer* bodi
 	memcpy(m_paramBuffer->getBufferPointer(), &p, sizeof(p));
 	m_paramBuffer->setDirty();
 
-	runIterations(bodies, numBodies, m_residentJoints, iterations);
+	runIterations(bodies, numBodies, m_residentJoints, iterations, sleepState);
 	return true;
 }
 

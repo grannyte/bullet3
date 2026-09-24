@@ -143,10 +143,12 @@ public:
 	 * @param iterations Jacobi passes; never fewer than 1.
 	 * @param deltaTime Timestep the impulses are scaled against.
 	 * @param erp Baumgarte position-correction factor in [0,1] for joints without OWN_ERP.
+	 * @param sleepState Per-body sleep words (bit 31 = asleep); an asleep side is immovable. 0 = all awake.
 	 * @return False if the kernels are unavailable or uploadJoints/uploadInvInertia never ran.
 	 */
 	bool solveJointsResident(irr::scene::IComputeBuffer* bodies, unsigned int numBodies,
-							 int iterations = 20, float deltaTime = 1.f / 60.f, float erp = 0.2f);
+							 int iterations = 20, float deltaTime = 1.f / 60.f, float erp = 0.2f,
+							 irr::scene::IComputeBuffer* sleepState = 0);
 
 	/**
 	 * @brief Reads back which joints the GPU has broken since the last uploadJoints.
@@ -308,7 +310,7 @@ private:
 
 	void releaseBuffers();
 	void runIterations(irr::scene::IComputeBuffer* bodies, unsigned int numBodies,
-					   unsigned int numJoints, int iterations);
+					   unsigned int numJoints, int iterations, irr::scene::IComputeBuffer* sleepState = 0);
 
 	irr::video::IVideoDriver* m_driver;
 	bool m_doubleSingle;

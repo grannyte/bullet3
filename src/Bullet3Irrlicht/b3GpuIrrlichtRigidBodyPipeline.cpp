@@ -32,7 +32,20 @@ struct IrrFloat4
 	float x, y, z, w;
 };
 
+// Mirrors ExternalForceParams in B3IntegrateTransformsBody.hlsli - 64 bytes.
+struct ExternalForceParams
+{
+	float toLocal[12];
+	unsigned int numTasks;
+	unsigned int numBodies;
+	unsigned int numRows;
+	unsigned int pad0;
+};
+
 static_assert(sizeof(IntegrateParams) == 48, "IntegrateParams must match the HLSL struct stride");
+static_assert(sizeof(ExternalForceParams) == 64, "ExternalForceParams must match the HLSL struct stride");
+static_assert(sizeof(b3GpuIrrlichtRigidBodyPipeline::b3IrrExternalForceRow) == 32, "b3ExternalForceRow is two float4");
+static_assert(sizeof(b3GpuIrrlichtRigidBodyPipeline::b3IrrExternalForceTask) == 32, "b3ExternalForceTask is 32 bytes");
 static_assert(sizeof(IrrFloat4) == 16, "GravityAccel/BodyDamping elements are float4 in HLSL");
 // 28 bytes: the demo's DemoTransform and B3IntegrateTransforms.hlsl's b3IrrBodyTransform.
 static_assert(sizeof(b3GpuIrrlichtRigidBodyPipeline::b3IrrBodyTransform) == 28,
@@ -42,7 +55,8 @@ static_assert(sizeof(b3GpuIrrlichtRigidBodyPipeline::b3IrrBodyTransform) == 28,
 b3GpuIrrlichtRigidBodyPipeline::b3GpuIrrlichtRigidBodyPipeline(irr::video::IVideoDriver* driver)
 	: m_driver(driver), m_doubleSingle(false), m_bodyBuffer(0), m_paramBuffer(0), m_transformBuffer(0),
 	  m_renderTransformBuffer(0), m_gravityBuffer(0), m_externalGravityBuffer(0), m_dampingBuffer(0),
-	  m_integrateMaterial(-1), m_integratePackMaterial(-1), m_gravity(b3MakeVector3(0.f, -9.8f, 0.f)),
+	  m_forceTaskBuffer(0), m_forceParamBuffer(0), m_integrateMaterial(-1), m_integratePackMaterial(-1),
+	  m_externalForceMaterial(-1), m_gravity(b3MakeVector3(0.f, -9.8f, 0.f)),
 	  m_angularDamping(0.99f), m_linearDamping(1.f)
 {
 }
@@ -57,6 +71,44 @@ b3GpuIrrlichtRigidBodyPipeline::~b3GpuIrrlichtRigidBodyPipeline()
 	b3IrrGpu::dropBuffer(m_renderTransformBuffer);
 	b3IrrGpu::dropBuffer(m_gravityBuffer);
 	b3IrrGpu::dropBuffer(m_dampingBuffer);
+	b3IrrGpu::dropBuffer(m_forceTaskBuffer);
+	b3IrrGpu::dropBuffer(m_forceParamBuffer);
+}
+
+bool b3GpuIrrlichtRigidBodyPipeline::accumulateExternalForces(irr::scene::IComputeBuffer* rows, unsigned int numRows,
+															   const b3IrrExternalForceTask* tasks, unsigned int numTasks,
+															   unsigned int numBodies, const float* toLocal)
+{
+	if (m_externalForceMaterial < 0 || !rows || numRows == 0 || numTasks == 0 || !toLocal || !m_gravityBuffer ||
+		m_gravityBuffer->getStructureCount() < numBodies ||
+		!b3IrrGpu::strideMatches(rows, sizeof(b3IrrExternalForceRow)))
+		return false;
+	if (tasks)
+		b3IrrGpu::uploadBuffer<b3IrrExternalForceTask>(m_forceTaskBuffer, tasks, numTasks);
+	else if (!m_forceTaskBuffer || m_forceTaskBuffer->getStructureCount() < numTasks)
+		return false;
+
+	ExternalForceParams p;
+	memcpy(p.toLocal, toLocal, sizeof(p.toLocal));
+	p.numTasks = numTasks;
+	p.numBodies = numBodies;
+	p.numRows = numRows;
+	p.pad0 = 0;
+	b3IrrGpu::uploadBuffer<ExternalForceParams>(m_forceParamBuffer, &p, 1);
+
+	irr::video::SMaterial mat;
+	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_externalForceMaterial;
+	m_driver->setMaterial(mat);
+	m_driver->bindComputeBuffer(6, m_forceParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(7, m_forceTaskBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(8, rows, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(4, m_gravityBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((numTasks + 63) / 64, 1, 1));
+	m_driver->unbindComputeResources();
+
+	// Written as a UAV here, read as an SRV by the actuators and the integrator.
+	m_driver->computeBarrier(m_gravityBuffer);
+	return true;
 }
 
 bool b3GpuIrrlichtRigidBodyPipeline::uploadGravity(const std::vector<b3Vector3>& gravityAccel,
@@ -125,6 +177,9 @@ bool b3GpuIrrlichtRigidBodyPipeline::init(irr::io::IFileSystem* fileSystem, bool
 
 	m_integrateMaterial = gpu->addComputeShaderFromFile(shaderPath, "CSMain", irr::video::ECST_CS_5_0, 0);
 	m_integratePackMaterial = gpu->addComputeShaderFromFile(shaderPath, "CSIntegrateAndPack",
+															irr::video::ECST_CS_5_0, 0);
+	// Optional: without it a device-held force is folded on the CPU instead.
+	m_externalForceMaterial = gpu->addComputeShaderFromFile(shaderPath, "CSAccumulateExternalForce",
 															irr::video::ECST_CS_5_0, 0);
 
 	return m_integrateMaterial >= 0;

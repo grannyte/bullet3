@@ -2,6 +2,9 @@
 // Body layout comes from B3Precision.hlsli - 80 bytes in f32, 96 in df64 (position gains a lo half).
 // Included by B3IntegrateTransforms.hlsl (f32) and B3IntegrateTransformsDS.hlsl (df64).
 
+#ifndef B3_INTEGRATE_TRANSFORMS_BODY_HLSLI
+#define B3_INTEGRATE_TRANSFORMS_BODY_HLSLI
+
 #include "B3Precision.hlsli"
 
 // Params ride in a structured buffer, not shader constants: this compute path reflects no
@@ -258,3 +261,60 @@ void CSIntegrateAndPack(uint3 tid : SV_DispatchThreadID)
 	OutRenderTransforms[nodeID] = r;
 #endif
 }
+
+// A force a producer left on the device: xyz as df64 halves, lo.w != 0 once the row was written.
+struct b3ExternalForceRow
+{
+	float4 hi;
+	float4 lo;
+};
+
+// One per body, so no two threads write one GravityAccel entry.
+struct b3ExternalForceTask
+{
+	uint body;
+	uint row;
+	uint pad0;
+	uint pad1;
+	float4 scale;   // invMass * linear factor per axis
+};
+
+struct ExternalForceParams
+{
+	float4 toLocal0;   // rows of the rotation into this world's frame
+	float4 toLocal1;
+	float4 toLocal2;
+	uint numTasks;
+	uint numBodies;
+	uint numRows;
+	uint pad0;
+};
+
+StructuredBuffer<ExternalForceParams> ForceParams : register(t6);
+StructuredBuffer<b3ExternalForceTask> ForceTasks : register(t7);
+StructuredBuffer<b3ExternalForceRow> ForceRows : register(t8);
+RWStructuredBuffer<float4> AccelOut : register(u4);
+
+//! m_totalForce * invMass on the device: runs after the gravity upload, before actuators and integration.
+[numthreads(64, 1, 1)]
+void CSAccumulateExternalForce(uint3 tid : SV_DispatchThreadID)
+{
+	const ExternalForceParams p = ForceParams[0];
+	if (tid.x >= p.numTasks)
+		return;
+
+	const b3ExternalForceTask t = ForceTasks[tid.x];
+	if (t.body >= p.numBodies || t.row >= p.numRows)
+		return;
+	const b3ExternalForceRow f = ForceRows[t.row];
+	if (f.lo.w == 0.f)
+		return;
+
+	precise float3 local = float3(dot(p.toLocal0.xyz, f.hi.xyz), dot(p.toLocal1.xyz, f.hi.xyz), dot(p.toLocal2.xyz, f.hi.xyz))
+						 + float3(dot(p.toLocal0.xyz, f.lo.xyz), dot(p.toLocal1.xyz, f.lo.xyz), dot(p.toLocal2.xyz, f.lo.xyz));
+	float4 accel = AccelOut[t.body];
+	accel.xyz += local * t.scale.xyz;
+	AccelOut[t.body] = accel;
+}
+
+#endif // B3_INTEGRATE_TRANSFORMS_BODY_HLSLI

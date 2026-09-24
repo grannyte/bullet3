@@ -9,6 +9,8 @@
 //                           expanded without rounding its edges/corners, so a sweep grazing an
 //                           edge or corner reports a hit up to radius*(sqrt(3)-1) early. Exact on
 //                           face regions. Tighten with a per-edge/per-vertex pass if a caller needs it.
+//   hull with a body margin exact rounded hull (hull + margin sphere), Bullet's hull ray semantics
+//   height field            never hit: planets are answered by the caller
 //   anything else           world-AABB slab hit, normal = entered slab axis (conservative)
 // A query starting inside a shape reports no hit on it, matching Bullet's convex ray test.
 //
@@ -20,12 +22,19 @@
 #define WG_SIZE 64
 #define TRAVERSE_MAX_STACK_SIZE 128
 #define QUERY_MAX_FACES 64
+#define QUERY_MAX_FACE_INDICES 64
+#define QUERY_MAX_VERTICES 256
+#define QUERY_MAX_IGNORE 256
 
 #define QUERY_KIND_RAY 0u
 #define QUERY_KIND_SPHERE 1u
+#define QUERY_EXCLUDED_ROOT -2
+#define QUERY_NO_IGNORE 0xFFFFFFFFu
 
+#define SHAPE_HEIGHT_FIELD 1
 #define SHAPE_CONVEX_HULL 3
 #define SHAPE_SPHERE 7
+#define SHAPE_PLANET 16
 
 struct QueryParams
 {
@@ -33,6 +42,10 @@ struct QueryParams
 	int rootIndex;      // marker-encoded, as written by CSBuildInternalNodes
 	uint useOwnerFilter;
 	uint numBodies;
+	uint useMargins;
+	uint pad0;
+	uint pad1;
+	uint pad2;
 };
 
 struct b3Query
@@ -42,7 +55,7 @@ struct b3Query
 	float radius;   // 0 for a ray
 	int ownerRoot;  // -1 filters nothing
 	uint kind;
-	uint pad;
+	uint ignoreOffset;  // QUERY_NO_IGNORE, or [count, body...] in IgnoreBodies
 };
 
 struct b3QueryHit
@@ -102,6 +115,10 @@ StructuredBuffer<b3Collidable> Collidables : register(t8);
 StructuredBuffer<b3ConvexPolyhedronData> ConvexShapes : register(t9);
 StructuredBuffer<b3GpuFace> Faces : register(t10);
 StructuredBuffer<int> BodyOwnerRoots : register(t11);             // per body; only read when useOwnerFilter
+StructuredBuffer<float> BodyMargins : register(t12);              // per body; only read when useMargins
+StructuredBuffer<float4> HullVertices : register(t13);
+StructuredBuffer<int> HullFaceIndices : register(t14);
+StructuredBuffer<int> IgnoreBodies : register(t15);
 
 RWStructuredBuffer<b3QueryHit> OutHits : register(u0);
 
@@ -157,20 +174,24 @@ bool rayHitsSphere(float3 o, float3 dir, float rayLength, float3 c, float R, out
 {
 	t = 0.f;
 	n = float3(0.f, 0.f, 0.f);
-	const float3 m = o - c;
+	const float3 m0 = o - c;
+	if (dot(m0, m0) - R * R <= 0.f)
+		return false;   // inside
+	// Solved from just short of the sphere: from far away b*b - cc cancels catastrophically in f32.
+	const float shift = max(0.f, -dot(m0, dir) - R);
+	const float3 m = m0 + dir * shift;
 	const float b = dot(m, dir);
 	const float cc = dot(m, m) - R * R;
-	if (cc <= 0.f)
-		return false;   // inside
 	if (b > 0.f)
 		return false;   // pointing away
 	const float disc = b * b - cc;
 	if (disc < 0.f)
 		return false;
-	t = -b - sqrt(disc);
+	const float local = -b - sqrt(disc);
+	t = shift + local;
 	if (t < 0.f || t > rayLength)
 		return false;
-	n = (o + dir * t - c) / R;
+	n = (m + dir * local) / R;
 	return true;
 }
 
@@ -238,6 +259,120 @@ bool rayHitsHull(float3 o, float3 dir, float rayLength, b3RigidBodyData body,
 	return true;
 }
 
+//! Lateral surface of the cylinder of radius R around segment a-b (caps are the vertex spheres).
+bool rayHitsEdge(float3 o, float3 dir, float rayLength, float3 a, float3 b, float R, out float t, out float3 n)
+{
+	t = 0.f;
+	n = float3(0.f, 0.f, 0.f);
+	const float3 ab = b - a;
+	const float abLen2 = dot(ab, ab);
+	if (abLen2 < 1e-12f)
+		return false;
+	const float3 ao = o - a;
+	const float dAxis = dot(dir, ab) / abLen2;
+	const float oAxis = dot(ao, ab) / abLen2;
+	const float3 dPerp = dir - ab * dAxis;
+	const float3 oPerp = ao - ab * oAxis;
+	const float A = dot(dPerp, dPerp);
+	const float C = dot(oPerp, oPerp) - R * R;
+	if (A < 1e-12f || C <= 0.f)
+		return false;
+	const float B = dot(oPerp, dPerp);
+	const float disc = B * B - A * C;
+	if (disc < 0.f)
+		return false;
+	t = (-B - sqrt(disc)) / A;
+	const float s = oAxis + dAxis * t;
+	if (t < 0.f || t > rayLength || s < 0.f || s > 1.f)
+		return false;
+	n = (ao + dir * t - ab * s) / R;
+	return true;
+}
+
+//! Hull grown by a sphere of radius R (Minkowski sum), in the body's frame. The pushed-plane entry is
+//! exact when it lands over a face; otherwise the hit is on an edge cylinder or a vertex sphere.
+bool rayHitsRoundedHull(float3 o, float3 dir, float rayLength, b3RigidBodyData body,
+						b3ConvexPolyhedronData hull, float R, out float t, out float3 worldNormal)
+{
+	float tEnter;
+	float3 enterNormal;
+	if (!rayHitsHull(o, dir, rayLength, body, hull, R, tEnter, enterNormal))
+	{
+		t = 0.f;
+		worldNormal = float3(0.f, 0.f, 0.f);
+		return false;
+	}
+	t = tEnter;
+	worldNormal = enterNormal;
+
+	const float3 ld = quatRotateInv(body.quat, dir);
+	// Re-originated at the plane entry, which the true hit never precedes: from far away the edge and
+	// vertex quadratics cancel catastrophically in f32 (millimetres at 30 m).
+	const float3 lo = quatRotateInv(body.quat, o - body.pos.xyz) + ld * tEnter;
+	const float rest = rayLength - tEnter;
+	const float3 q = lo - quatRotateInv(body.quat, enterNormal) * R;
+	const float tol = 1e-5f * max(hull.radius, 1.f);
+	bool overFace = true;
+	[loop]
+	for (int f = 0; f < QUERY_MAX_FACES; ++f)
+	{
+		if (f >= hull.numFaces)
+			break;
+		const float4 plane = Faces[hull.faceOffset + f].plane;
+		if (dot(plane.xyz, q) + plane.w > tol)
+		{
+			overFace = false;
+			break;
+		}
+	}
+	if (overFace)
+		return true;
+
+	float best = rest + 1.f;
+	float3 bestNormal = float3(0.f, 0.f, 0.f);
+	[loop]
+	for (int g = 0; g < QUERY_MAX_FACES; ++g)
+	{
+		if (g >= hull.numFaces)
+			break;
+		const b3GpuFace face = Faces[hull.faceOffset + g];
+		[loop]
+		for (int k = 0; k < QUERY_MAX_FACE_INDICES; ++k)
+		{
+			if (k >= face.numIndices)
+				break;
+			const int ia = HullFaceIndices[face.indexOffset + k];
+			const int ib = HullFaceIndices[face.indexOffset + ((k + 1) % face.numIndices)];
+			float te;
+			float3 ne;
+			if (rayHitsEdge(lo, ld, rest, HullVertices[hull.vertexOffset + ia].xyz,
+							HullVertices[hull.vertexOffset + ib].xyz, R, te, ne) && te < best)
+			{
+				best = te;
+				bestNormal = ne;
+			}
+		}
+	}
+	[loop]
+	for (int v = 0; v < QUERY_MAX_VERTICES; ++v)
+	{
+		if (v >= hull.numVertices)
+			break;
+		float tv;
+		float3 nv;
+		if (rayHitsSphere(lo, ld, rest, HullVertices[hull.vertexOffset + v].xyz, R, tv, nv) && tv < best)
+		{
+			best = tv;
+			bestNormal = nv;
+		}
+	}
+	if (best > rest)
+		return false;
+	t = tEnter + best;
+	worldNormal = quatRotate(body.quat, bestNormal);
+	return true;
+}
+
 //! Exact (or documented-conservative) test of one query against one body. t is a distance.
 bool queryHitsBody(float3 o, float3 dir, float rayLength, float radius, uint bodyIndex,
 				   out float t, out float3 n)
@@ -253,8 +388,16 @@ bool queryHitsBody(float3 o, float3 dir, float rayLength, float radius, uint bod
 	if (col.shapeType == SHAPE_SPHERE)
 		return rayHitsSphere(o, dir, rayLength, body.pos.xyz, col.radius + radius, t, n);
 
+	if (col.shapeType == SHAPE_HEIGHT_FIELD || col.shapeType == SHAPE_PLANET)
+		return false;
+
 	if (col.shapeType == SHAPE_CONVEX_HULL && col.shapeIndex >= 0)
+	{
+		const float margin = Params[0].useMargins != 0 ? BodyMargins[bodyIndex] : 0.f;
+		if (margin > 0.f)
+			return rayHitsRoundedHull(o, dir, rayLength, body, ConvexShapes[col.shapeIndex], radius + margin, t, n);
 		return rayHitsHull(o, dir, rayLength, body, ConvexShapes[col.shapeIndex], radius, t, n);
+	}
 
 	// Shapes without an exact kernel here: the (conservative) world bound stands in for them.
 	float3 entryNormal;
@@ -333,6 +476,26 @@ void CSQueryTraverse(uint3 tid : SV_DispatchThreadID)
 		{
 			if (ownerFilter && BodyOwnerRoots[bodyIndex] == q.ownerRoot)
 				continue;
+			if (Params[0].useOwnerFilter != 0 && BodyOwnerRoots[bodyIndex] == QUERY_EXCLUDED_ROOT)
+				continue;
+			if (q.ignoreOffset != QUERY_NO_IGNORE)
+			{
+				const uint ignoreCount = (uint)IgnoreBodies[q.ignoreOffset];
+				bool ignored = false;
+				[loop]
+				for (uint k = 0; k < QUERY_MAX_IGNORE; ++k)
+				{
+					if (k >= ignoreCount)
+						break;
+					if (IgnoreBodies[q.ignoreOffset + 1 + k] == (int)bodyIndex)
+					{
+						ignored = true;
+						break;
+					}
+				}
+				if (ignored)
+					continue;
+			}
 
 			float t;
 			float3 n;

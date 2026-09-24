@@ -81,6 +81,40 @@ public:
 	/// Drops per-body gravity/damping again, so the uniform params apply to every body.
 	void clearPerBodyOverrides();
 
+	/// A force a producer left on the device, 32 bytes: xyz as df64 halves; lo[3] != 0 once written.
+	struct b3IrrExternalForceRow
+	{
+		float hi[4];
+		float lo[4];
+	};
+
+	/// One body's force, 32 bytes: its row and invMass times the linear factor per axis.
+	struct b3IrrExternalForceTask
+	{
+		unsigned int body;
+		unsigned int row;
+		unsigned int pad0;
+		unsigned int pad1;
+		float scale[4];
+	};
+
+	/**
+	 * @brief Adds device-held forces, rotated into this world's frame, to the uploadGravity buffer.
+	 * @param rows b3IrrExternalForceRow per row.
+	 * @param numRows Rows in that buffer.
+	 * @param tasks Tasks to upload, one per body; 0 reuses the last upload.
+	 * @param numTasks Task count.
+	 * @param numBodies Bodies the gravity buffer covers.
+	 * @param toLocal Three float4 rows rotating a force into the world frame.
+	 * @return False if the kernel is unavailable or uploadGravity never ran.
+	 */
+	bool accumulateExternalForces(irr::scene::IComputeBuffer* rows, unsigned int numRows,
+								  const b3IrrExternalForceTask* tasks, unsigned int numTasks,
+								  unsigned int numBodies, const float* toLocal);
+
+	/// Whether the external-force kernel compiled.
+	bool isExternalForceAvailable() const { return m_externalForceMaterial >= 0; }
+
 	/// The per-body gravity buffer in effect (external wins), or 0 while uniform gravity applies.
 	/// Actuators bind the same buffer so "down" agrees with the integrator by construction.
 	irr::scene::IComputeBuffer* getGravityBuffer() const
@@ -194,8 +228,11 @@ private:
 	irr::scene::IComputeBuffer* m_gravityBuffer;
 	irr::scene::IComputeBuffer* m_externalGravityBuffer;
 	irr::scene::IComputeBuffer* m_dampingBuffer;
+	irr::scene::IComputeBuffer* m_forceTaskBuffer;
+	irr::scene::IComputeBuffer* m_forceParamBuffer;
 	int m_integrateMaterial;
 	int m_integratePackMaterial;
+	int m_externalForceMaterial;
 
 	std::vector<b3RigidBodyData> m_cpuBodies;
 	b3Vector3 m_gravity;

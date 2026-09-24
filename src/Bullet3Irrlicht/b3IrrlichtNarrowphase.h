@@ -49,8 +49,11 @@ public:
 	b3IrrlichtNarrowphase(irr::video::IVideoDriver* driver);
 	~b3IrrlichtNarrowphase();
 
+	/// Collidable kind of a registerPlanetShape entry; outside b3ShapeTypes so no other kernel claims it.
+	static const int kShapePlanet = 16;
+
 	/**
-	 * @brief Compiles the narrowphase kernels. The PlanetShape kernel is optional - see
+	 * @brief Compiles the narrowphase kernels. The PlanetShape kernels are optional - see
 	 *        isPlanetShapeAvailable().
 	 * @param fileSystem Device filesystem; without it a missing shader silently binds an
 	 *        unrelated material instead of failing.
@@ -64,11 +67,20 @@ public:
 	bool isDoubleSingle() const { return m_doubleSingle; }
 
 	/**
-	 * @brief Whether PlanetShape collision compiled. It #includes noise2.hlsl, which fails to
-	 *        unroll under Release shader flags, so a box-only caller stays fully functional.
+	 * @brief Whether the host-driven PlanetShape kernel compiled; a data tree without
+	 *        B3PlanetContacts.hlsl (it includes the host game's noise2.hlsl) leaves it off.
 	 * @return True when computePlanetContacts can be used.
 	 */
 	bool isPlanetShapeAvailable() const { return m_planetMaterial >= 0; }
+
+	/// Whether computePlanetContactsResident can run (its kernel compiled for this precision).
+	bool isPlanetResidentAvailable() const { return m_planetResidentMaterial >= 0; }
+
+	/// Whether any convex hull is registered; without one the convex clip pass has nothing to do.
+	bool hasConvexShapes() const { return !m_cpuHulls.empty(); }
+
+	/// Whether any registerPlanetShape entry exists.
+	bool hasPlanetShapes() const { return !m_cpuPlanets.empty(); }
 
 	/**
 	 * @brief Enables speculative contacts (Bullet-style CCD) for every contact and AABB call.
@@ -246,30 +258,57 @@ public:
 							   bool* overflowed = 0);
 
 	/**
-	 * @brief Sets noise2.hlsl's five `params` constants for the planet kernel.
-	 *
-	 * Leaving these at zero makes texsize 0, which divides to NaN inside the noise - and a NaN
-	 * separation is not rejected by a `>` test, so every sample becomes a spurious contact.
-	 *
+	 * @brief Sets noise2.hlsl's five `params` constants for both planet kernels.
 	 * @param mTimer Planet seed.
 	 * @param plates Non-zero to enable plate tectonics shaping.
 	 * @param rivers Non-zero to enable river carving.
 	 * @param atmosphereDensity Drives the final height scaling.
-	 * @param texsize Heightmap resolution the noise was authored against; must be non-zero.
+	 * @param texsize Heightmap resolution the patch entry was authored against.
 	 */
 	void setPlanetNoiseParams(float mTimer, float plates, float rivers, float atmosphereDensity,
 							  float texsize);
 
-	/// Planet parameters, layout-identical to the HLSL PlanetData (32 bytes).
+	/// Planet parameters, layout-identical to the HLSL OsPlanetParams (32 bytes).
 	struct b3IrrPlanet
 	{
-		float center[3];
+		float center[3];         // in the planet body's frame
 		float baseRadius;
-		float heightScale;
-		float pad0;
-		float pad1;
-		float pad2;
+		float heightScale;       // metres of relief per unit of shaped noise
+		float maxDisplacement;   // relief clamp band; <= 0 leaves it unclamped
+		float sampleStep;        // smallest footprint the terrain plane is fitted over
+		float flags;
 	};
+
+	/**
+	 * @brief Registers a planet body's shape: its terrain is the height function, contacts come
+	 *        from computePlanetContactsResident. The noise constants are setPlanetNoiseParams'.
+	 * @param localAabb Planet bound in its own frame (broadphase only).
+	 * @param planet Radius, relief scale, clamp band and footprint step; center must be 0 today.
+	 * @return Collidable index, of kind kShapePlanet.
+	 */
+	int registerPlanetShape(const b3IrrAabb& localAabb, const b3IrrPlanet& planet);
+
+	/**
+	 * @brief Terrain contacts for every (body, planet) pair in a device-resident pair list,
+	 *        APPENDED to the contact buffer the convex pass just filled.
+	 *
+	 * Body A of each manifold is the dynamic body and B the planet body, so every lever arm is
+	 * small; up to 4 points from the body's lowest face against the local terrain.
+	 *
+	 * @param bodies Device-resident bodies; the planet body must be one of them.
+	 * @param numBodies Bodies in that buffer.
+	 * @param pairs Device-resident (bodyA, bodyB) pairs; non-planet pairs are skipped.
+	 * @param pairCount EHBF_DRAW_INDIRECT_ARGS buffer holding the appended pair count.
+	 * @param maxPairs Capacity of the pair buffer; the count is clamped to it.
+	 * @param maxContacts Capacity for the contact buffer.
+	 * @param resetCounter True only when no convex pass ran this step, so this pass owns the buffer.
+	 * @return False if the kernel is unavailable or the shapes were never uploaded.
+	 */
+	bool computePlanetContactsResident(irr::scene::IComputeBuffer* bodies, unsigned int numBodies,
+									   irr::scene::IComputeBuffer* pairs,
+									   irr::scene::IComputeBuffer* pairCount,
+									   unsigned int maxPairs, unsigned int maxContacts,
+									   bool resetCounter);
 
 	/**
 	 * @brief Sphere-vs-planet contacts, evaluating the terrain noise FUNCTION per sample.
@@ -345,6 +384,8 @@ public:
 	irr::scene::IComputeBuffer* getHullVertexBuffer() const { return m_vertexBuffer; }
 	irr::scene::IComputeBuffer* getHullFaceIndexBuffer() const { return m_indexBuffer; }
 	irr::scene::IComputeBuffer* getHullEdgeBuffer() const { return m_edgeBuffer; }
+	/// registerPlanetShape records (b3IrrPlanet), for other planet kernels; null until one is uploaded.
+	irr::scene::IComputeBuffer* getPlanetBuffer() const { return m_residentPlanetBuffer; }
 
 	/**
 	 * @brief computeWorldAabbs straight out of a device-resident body buffer.
@@ -418,6 +459,7 @@ private:
 	int m_satMaterial;
 	int m_clipMaterial;
 	int m_planetMaterial;
+	int m_planetResidentMaterial;
 	int m_expandMaterial;
 	int m_clipLeafMaterial;
 
@@ -438,10 +480,13 @@ private:
 	irr::scene::IComputeBuffer* m_edgeBuffer;
 	irr::scene::IComputeBuffer* m_satResultBuffer;
 	irr::scene::IComputeBuffer* m_planetBuffer;
+	irr::scene::IComputeBuffer* m_residentPlanetBuffer;
+	irr::scene::IComputeBuffer* m_planetParamBuffer;
+	std::vector<b3IrrPlanet> m_cpuPlanets;
 
-	// Owned by the material renderer once handed to addComputeShaderFromFile; kept to update the
+	// Owned by the material renderers once handed to addComputeShaderFromFile; kept to update the
 	// values between dispatches without recompiling the shader.
-	class PlanetNoiseParams* m_planetNoiseParams;
+	class b3IrrPlanetNoiseParams* m_planetNoiseParams;
 	irr::scene::IComputeBuffer* m_bodyBuffer;
 	irr::scene::IComputeBuffer* m_collidableBuffer;
 	irr::scene::IComputeBuffer* m_localAabbBuffer;

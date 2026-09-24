@@ -1,7 +1,5 @@
-// Port of Bullet3OpenCL solveContact/solveFriction - sequential-impulse contact solver.
-//
-// Velocity deltas accumulate as FIXED-POINT INTEGERS via InterlockedAdd: SM5.0 has no float
-// atomics, and integer accumulation is order-independent, so thread order cannot change the result.
+// Port of Bullet3OpenCL solveContact/solveFriction - sequential-impulse contact solver. Velocity
+// deltas are fixed-point InterlockedAdds: SM5.0 has no float atomics, and integer adds are order-free.
 
 // Included by B3SolveContacts.hlsl (f32) and B3SolveContactsDS.hlsl (df64).
 
@@ -98,14 +96,35 @@ void atomicAddVel(uint bodyIndex, float3 dLin, float3 dAng)
 	InterlockedAdd(VelocityDelta[base + 5], (int)(dAng.z * FIXED_SCALE), ignored);
 }
 
-//! World-space inverse inertia for a diagonal local tensor: R * I^-1 * R^T applied to v.
-float3 applyInvInertia(uint bodyIndex, float4 quat, float3 v)
+//! One side of a contact as the solve sees it; a sleeping body is immovable, see CSSolveContacts.
+struct b3SolveSide
 {
-	const float3 invI = InvInertia[bodyIndex].xyz;
+	uint index;
+	float4 quat;
+	float invMass;      // 0 when immovable
+	bool immovable;
+};
+
+b3SolveSide makeSolveSide(uint bodyIndex, b3RigidBodyData body, uint sleepState)
+{
+	b3SolveSide s;
+	s.index = bodyIndex;
+	s.quat = body.quat;
+	s.immovable = (body.invMass == 0.f) || ((sleepState & B3_ASLEEP_BIT) != 0u);
+	s.invMass = s.immovable ? 0.f : body.invMass;
+	return s;
+}
+
+//! World-space inverse inertia for a diagonal local tensor: R * I^-1 * R^T applied to v.
+float3 applyInvInertia(b3SolveSide s, float3 v)
+{
+	if (s.immovable)
+		return float3(0.f, 0.f, 0.f);
+	const float3 invI = InvInertia[s.index].xyz;
 	// Rotate into local space, scale, rotate back - avoids materialising the 3x3.
-	const float4 invQuat = float4(-quat.xyz, quat.w);
+	const float4 invQuat = float4(-s.quat.xyz, s.quat.w);
 	const float3 local = quatRotate(invQuat, v);
-	return quatRotate(quat, local * invI);
+	return quatRotate(s.quat, local * invI);
 }
 
 //! Two unit vectors spanning the plane of n, chosen off the smaller component so the
@@ -133,12 +152,12 @@ void planeSpace(float3 n, out float3 t0, out float3 t1)
  * along it - the change in the ACCUMULATED value, which may be negative.
  */
 float solveTangentImpulse(uint slot, float3 tangent, float3 rA, float3 rB,
-						  uint bodyA, uint bodyB, b3RigidBodyData a, b3RigidBodyData b,
+						  b3SolveSide sa, b3SolveSide sb,
 						  float3 relVelVec, float maxFriction, float share)
 {
-	const float3 angA = applyInvInertia(bodyA, a.quat, cross(rA, tangent));
-	const float3 angB = applyInvInertia(bodyB, b.quat, cross(rB, tangent));
-	const float denom = a.invMass + b.invMass
+	const float3 angA = applyInvInertia(sa, cross(rA, tangent));
+	const float3 angB = applyInvInertia(sb, cross(rB, tangent));
+	const float denom = sa.invMass + sb.invMass
 					  + dot(tangent, cross(angA, rA) + cross(angB, rB));
 	if (denom <= 1e-9f)
 		return 0.f;
@@ -167,13 +186,12 @@ void CSSolveContacts(uint3 tid : SV_DispatchThreadID)
 	const b3RigidBodyData a = Bodies[bodyA];
 	const b3RigidBodyData b = Bodies[bodyB];
 
-	// Both static: nothing to solve, and dividing by a zero effective mass would produce inf.
-	if (a.invMass == 0.f && b.invMass == 0.f)
-		return;
+	const b3SolveSide sa = makeSolveSide(bodyA, a, SleepState[bodyA]);
+	const b3SolveSide sb = makeSolveSide(bodyB, b, SleepState[bodyB]);
 
-	// Neither side can move, so this contact's impulse is zero by construction. This early-out IS
-	// the settled-scene saving - ten Jacobi iterations over a sleeping stack collapse to a load.
-	if (((SleepState[bodyA] & SleepState[bodyB]) & B3_ASLEEP_BIT) != 0u)
+	// A sleeper's own supports are both-asleep contacts, dropped before this kernel, so a real mass
+	// here solves it as a free body. Neither side movable: impulse is zero, and 1/0 would be inf.
+	if (sa.immovable && sb.immovable)
 		return;
 
 	const float3 normal = c.worldNormalOnB.xyz;
@@ -188,7 +206,8 @@ void CSSolveContacts(uint3 tid : SV_DispatchThreadID)
 
 	// Jacobi over-corrects a body by its contact count; the normal row saturates but friction's
 	// symmetric clamp chatters and pumps energy. 1/N is the stability bound.
-	const int contactLoad = max(BodyPointCount[bodyA], BodyPointCount[bodyB]);
+	const int contactLoad = max(sa.immovable ? 0 : BodyPointCount[bodyA],
+								sb.immovable ? 0 : BodyPointCount[bodyB]);
 	const float frictionRelax = 1.f / (float)max(contactLoad, 1);
 
 	float3 t0, t1;
@@ -235,9 +254,9 @@ void CSSolveContacts(uint3 tid : SV_DispatchThreadID)
 			const float relVel = dot(normal, relVelVec);
 
 			// Effective mass along the normal, including the angular term.
-			const float3 angA = applyInvInertia(bodyA, a.quat, cross(rA, normal));
-			const float3 angB = applyInvInertia(bodyB, b.quat, cross(rB, normal));
-			const float denom = a.invMass + b.invMass
+			const float3 angA = applyInvInertia(sa, cross(rA, normal));
+			const float3 angB = applyInvInertia(sb, cross(rB, normal));
+			const float denom = sa.invMass + sb.invMass
 							  + dot(normal, cross(angA, rA) + cross(angB, rB));
 
 			if (denom > 1e-9f)
@@ -279,30 +298,30 @@ void CSSolveContacts(uint3 tid : SV_DispatchThreadID)
 				if (sweep == 1)
 				{
 					const float maxFriction = mu * accumulated;
-					P += t0 * solveTangentImpulse(slot + 1, t0, rA, rB, bodyA, bodyB, a, b,
+					P += t0 * solveTangentImpulse(slot + 1, t0, rA, rB, sa, sb,
 												  relVelVec, maxFriction, frictionRelax);
-					P += t1 * solveTangentImpulse(slot + 2, t1, rA, rB, bodyA, bodyB, a, b,
+					P += t1 * solveTangentImpulse(slot + 2, t1, rA, rB, sa, sb,
 												  relVelVec, maxFriction, frictionRelax);
 				}
 
-				if (a.invMass > 0.f)
+				if (!sa.immovable)
 				{
-					linA -= P * a.invMass;
-					angVA -= applyInvInertia(bodyA, a.quat, cross(rA, P));
+					linA -= P * sa.invMass;
+					angVA -= applyInvInertia(sa, cross(rA, P));
 				}
-				if (b.invMass > 0.f)
+				if (!sb.immovable)
 				{
-					linB += P * b.invMass;
-					angVB += applyInvInertia(bodyB, b.quat, cross(rB, P));
+					linB += P * sb.invMass;
+					angVB += applyInvInertia(sb, cross(rB, P));
 				}
 			}
 		}
 	}
 	}
 
-	if (a.invMass > 0.f)
+	if (!sa.immovable)
 		atomicAddVel(bodyA, linA - a.linVel.xyz, angVA - a.angVel.xyz);
-	if (b.invMass > 0.f)
+	if (!sb.immovable)
 		atomicAddVel(bodyB, linB - b.linVel.xyz, angVB - b.angVel.xyz);
 
 	// Rolling friction: one angular-only row per manifold opposing the relative spin, budgeted
@@ -317,8 +336,8 @@ void CSSolveContacts(uint3 tid : SV_DispatchThreadID)
 		{
 			const float spin = sqrt(spinSq);
 			const float3 axis = relAng / spin;
-			const float denomR = dot(axis, applyInvInertia(bodyA, a.quat, axis)
-										 + applyInvInertia(bodyB, b.quat, axis));
+			const float denomR = dot(axis, applyInvInertia(sa, axis)
+										 + applyInvInertia(sb, axis));
 			if (denomR > 1e-9f)
 			{
 				// Magnitude ledger only: the axis follows the spin between iterations, and a
@@ -331,10 +350,10 @@ void CSSolveContacts(uint3 tid : SV_DispatchThreadID)
 				RollingAccum[contactIndex] = used + mag;
 
 				const float3 L = axis * mag;
-				if (a.invMass > 0.f)
-					atomicAddVel(bodyA, float3(0.f, 0.f, 0.f), applyInvInertia(bodyA, a.quat, L));
-				if (b.invMass > 0.f)
-					atomicAddVel(bodyB, float3(0.f, 0.f, 0.f), -applyInvInertia(bodyB, b.quat, L));
+				if (!sa.immovable)
+					atomicAddVel(bodyA, float3(0.f, 0.f, 0.f), applyInvInertia(sa, L));
+				if (!sb.immovable)
+					atomicAddVel(bodyB, float3(0.f, 0.f, 0.f), -applyInvInertia(sb, L));
 			}
 		}
 	}

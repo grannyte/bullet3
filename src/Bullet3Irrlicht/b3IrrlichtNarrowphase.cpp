@@ -1,5 +1,6 @@
 #include "b3IrrlichtNarrowphase.h"
 #include "b3IrrlichtGpuBuffers.h"
+#include "b3IrrPlanetNoiseParams.h"
 
 #include <irrlicht.h>
 #include "ComputeBuffer.h"
@@ -64,40 +65,23 @@ struct IrrFloat4
 };
 }  // namespace
 
-/// Pushes noise2.hlsl's five `params` constants for the planet kernel.
-class PlanetNoiseParams : public irr::video::IShaderConstantSetCallBack
-{
-public:
-	float mTimer, plates, rivers, atmosphereDensity, texsize;
-
-	PlanetNoiseParams()
-		: mTimer(0.f), plates(1.f), rivers(1.f), atmosphereDensity(1.4f), texsize(512.f)
-	{
-	}
-
-	virtual void OnSetConstants(irr::video::IMaterialRendererServices* services, irr::s32 userData)
-	{
-		set(services, "mTimer", mTimer);
-		set(services, "Plates", plates);
-		set(services, "rivers", rivers);
-		set(services, "AtmosphereDensity", atmosphereDensity);
-		set(services, "texsize", texsize);
-	}
-
-private:
-	static void set(irr::video::IMaterialRendererServices* services, const char* name, float& value)
-	{
-		const irr::s32 id = services->getComputeShaderConstantID(name);
-		if (id >= 0)
-			services->setComputeShaderConstant(id, &value, 1);
-	}
-};
-
 namespace
 {
+/// Mirrors PlanetContactParams in B3PlanetContactsBody.hlsli.
+struct PlanetContactParams
+{
+	unsigned int numPairs;
+	float collisionMargin;
+	float speculativeDt;
+	float contactSlop;
+};
+
+/// A positive gap up to this is still emitted, as a speculative point that only caps the approach.
+const float kPlanetContactSlop = 0.02f;
 
 static_assert(sizeof(AabbParams) == 16, "AabbParams must match the HLSL struct stride");
 static_assert(sizeof(ContactParams) == 16, "ContactParams must match the HLSL struct stride");
+static_assert(sizeof(PlanetContactParams) == 16, "PlanetContactParams must match the HLSL struct stride");
 static_assert(sizeof(b3Collidable) == 16, "b3Collidable must match the HLSL struct stride");
 static_assert(sizeof(b3RigidBodyData) == 80, "b3RigidBodyData must match the HLSL struct stride");
 static_assert(sizeof(b3IrrGpu::b3IrrRigidBodyDataDS) == 96, "b3IrrGpu::b3IrrRigidBodyDataDS must match the OS_DS HLSL stride");
@@ -106,7 +90,7 @@ static_assert(sizeof(SatParams) == 16, "SatParams must match the HLSL struct str
 static_assert(sizeof(b3IrrSatResult) == 32, "b3IrrSatResult must match the HLSL SatResult stride");
 static_assert(sizeof(b3ConvexPolyhedronData) == 96, "b3ConvexPolyhedronData must match the HLSL struct stride");
 static_assert(sizeof(b3GpuFace) == 32, "b3GpuFace must match the HLSL struct stride");
-static_assert(sizeof(b3IrrlichtNarrowphase::b3IrrPlanet) == 32, "b3IrrPlanet must match the HLSL PlanetData stride");
+static_assert(sizeof(b3IrrlichtNarrowphase::b3IrrPlanet) == 32, "b3IrrPlanet must match the HLSL OsPlanetParams stride");
 static_assert(sizeof(ExpandParams) == 16, "ExpandParams must match the HLSL struct stride");
 static_assert(sizeof(IrrInt4) == 16, "IrrInt4 must match the HLSL int4 stride");
 static_assert(sizeof(b3GpuChildShape) == 48, "b3GpuChildShape must match the HLSL struct stride");
@@ -246,12 +230,12 @@ irr::scene::IComputeBuffer* uploadPairs(irr::scene::IComputeBuffer*& buffer,
 
 b3IrrlichtNarrowphase::b3IrrlichtNarrowphase(irr::video::IVideoDriver* driver)
 	: m_driver(driver), m_doubleSingle(false), m_dispatch(0), m_aabbMaterial(-1), m_sphereContactMaterial(-1), m_satMaterial(-1),
-	  m_clipMaterial(-1), m_planetMaterial(-1), m_expandMaterial(-1), m_clipLeafMaterial(-1),
+	  m_clipMaterial(-1), m_planetMaterial(-1), m_planetResidentMaterial(-1), m_expandMaterial(-1), m_clipLeafMaterial(-1),
 	  m_maxLeafPairs(65536),
 	  m_expandParamBuffer(0), m_childShapeBuffer(0), m_leafPairBuffer(0), m_leafPairCountBuffer(0),
 	  m_aabbParamBuffer(0), m_contactParamBuffer(0), m_satParamBuffer(0), m_hullBuffer(0),
 	  m_vertexBuffer(0), m_faceBuffer(0), m_indexBuffer(0), m_edgeBuffer(0), m_satResultBuffer(0),
-	  m_planetBuffer(0), m_planetNoiseParams(0),
+	  m_planetBuffer(0), m_residentPlanetBuffer(0), m_planetParamBuffer(0), m_planetNoiseParams(0),
 	  m_bodyBuffer(0), m_collidableBuffer(0),
 	  m_localAabbBuffer(0), m_worldAabbBuffer(0), m_pairBuffer(0), m_contactBuffer(0),
 	  m_contactCountBuffer(0), m_rollingFrictionBuffer(0), m_speculativeDt(0.f),
@@ -271,6 +255,8 @@ b3IrrlichtNarrowphase::~b3IrrlichtNarrowphase()
 	dropBuffer(m_edgeBuffer);
 	dropBuffer(m_satResultBuffer);
 	dropBuffer(m_planetBuffer);
+	dropBuffer(m_residentPlanetBuffer);
+	dropBuffer(m_planetParamBuffer);
 	dropBuffer(m_bodyBuffer);
 	dropBuffer(m_collidableBuffer);
 	dropBuffer(m_localAabbBuffer);
@@ -332,17 +318,19 @@ bool b3IrrlichtNarrowphase::init(irr::io::IFileSystem* fileSystem, bool doubleSi
 		m_clipLeafMaterial = gpu->addComputeShaderFromFile(clipLeafPath, "CSClipContacts", irr::video::ECST_CS_5_0, 0);
 	}
 
-	// PlanetShape is OPTIONAL: it #includes noise2.hlsl, whose FBM loops fail to unroll under
-	// Release shader flags (X3511). A caller that only collides boxes must not lose the whole
-	// pipeline because a kernel it never calls would not build.
+	// PlanetShape kernels are optional: a box-only caller must not lose the pipeline over a data
+	// tree without them. Both share one callback, so one setPlanetNoiseParams feeds both.
 	const irr::io::path planetPath = "media/shaders/B3PlanetContacts.hlsl";
-	if (!fileSystem || fileSystem->existFile(planetPath))
+	const irr::io::path planetResidentPath = m_doubleSingle ? "media/shaders/B3PlanetContactsDS.hlsl" : planetPath;
+	if (!fileSystem || (fileSystem->existFile(planetPath) && fileSystem->existFile(planetResidentPath)))
 	{
-		m_planetNoiseParams = new PlanetNoiseParams();
+		m_planetNoiseParams = new b3IrrPlanetNoiseParams();
 		m_planetMaterial = gpu->addComputeShaderFromFile(planetPath, "CSPlanetSphereContacts",
 														 irr::video::ECST_CS_5_0, m_planetNoiseParams);
+		m_planetResidentMaterial = gpu->addComputeShaderFromFile(planetResidentPath, "CSPlanetContactsResident",
+																 irr::video::ECST_CS_5_0, m_planetNoiseParams);
 		m_planetNoiseParams->drop();
-		if (m_planetMaterial < 0)
+		if (m_planetMaterial < 0 && m_planetResidentMaterial < 0)
 			m_planetNoiseParams = 0;
 	}
 
@@ -712,6 +700,12 @@ int b3IrrlichtNarrowphase::registerCompoundShape(const b3IrrCompoundChild* child
 	return (int)m_cpuCollidables.size() - 1;
 }
 
+int b3IrrlichtNarrowphase::registerPlanetShape(const b3IrrAabb& localAabb, const b3IrrPlanet& planet)
+{
+	m_cpuPlanets.push_back(planet);
+	return registerShapeWithLocalAabb(localAabb, kShapePlanet, (int)m_cpuPlanets.size() - 1);
+}
+
 bool b3IrrlichtNarrowphase::writeShapesToGpu()
 {
 	if (m_cpuCollidables.empty())
@@ -736,6 +730,9 @@ bool b3IrrlichtNarrowphase::writeShapesToGpu()
 	if (!m_cpuChildShapes.empty())
 		uploadBuffer<b3GpuChildShape>(m_childShapeBuffer, &m_cpuChildShapes[0],
 									  (irr::u32)m_cpuChildShapes.size());
+
+	if (!m_cpuPlanets.empty())
+		uploadBuffer<b3IrrPlanet>(m_residentPlanetBuffer, &m_cpuPlanets[0], (irr::u32)m_cpuPlanets.size());
 
 	// Always full length: the solver indexes it by collidable, so a short buffer would misindex.
 	if (m_cpuRollingFriction.size() < count)
@@ -1225,11 +1222,65 @@ void b3IrrlichtNarrowphase::setPlanetNoiseParams(float mTimer, float plates, flo
 {
 	if (!m_planetNoiseParams)
 		return;
-	m_planetNoiseParams->mTimer = mTimer;
-	m_planetNoiseParams->plates = plates;
-	m_planetNoiseParams->rivers = rivers;
-	m_planetNoiseParams->atmosphereDensity = atmosphereDensity;
-	m_planetNoiseParams->texsize = texsize;
+	m_planetNoiseParams->setValues(mTimer, plates, rivers, atmosphereDensity, texsize);
+}
+
+bool b3IrrlichtNarrowphase::computePlanetContactsResident(irr::scene::IComputeBuffer* bodies,
+														  unsigned int numBodies,
+														  irr::scene::IComputeBuffer* pairs,
+														  irr::scene::IComputeBuffer* pairCount,
+														  unsigned int maxPairs,
+														  unsigned int maxContacts,
+														  bool resetCounter)
+{
+	if (m_planetResidentMaterial < 0 || !isResidentPathAvailable() || !bodies || !pairs || !pairCount || numBodies == 0)
+		return false;
+	if (!m_collidableBuffer || !m_residentPlanetBuffer)
+		return false;
+	if (!b3IrrGpu::strideMatches(bodies, b3IrrGpu::bodyStride(m_doubleSingle)))
+		return false;
+
+	ensureBuffer<b3Contact4Data>(m_contactBuffer, maxContacts, irr::video::EHBF_COMPUTE_APPEND);
+	ensureBuffer<unsigned int>(m_contactCountBuffer, 4, irr::video::EHBF_DRAW_INDIRECT_ARGS);
+	ensureBuffer<PlanetContactParams>(m_planetParamBuffer, 1);
+
+	PlanetContactParams p;
+	p.numPairs = 0;
+	p.collisionMargin = 0.f;
+	p.speculativeDt = m_speculativeDt;
+	p.contactSlop = kPlanetContactSlop;
+	memcpy(m_planetParamBuffer->getBufferPointer(), &p, sizeof(p));
+	m_planetParamBuffer->setDirty();
+
+	if (!m_dispatch->prepareIndirect(pairCount, m_planetParamBuffer, 64, maxPairs))
+		return false;
+
+	irr::video::SMaterial mat;
+	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_planetResidentMaterial;
+	m_driver->setMaterial(mat);
+	// t0 is left free: noise2.hlsl declares its texfix sampler there.
+	m_driver->bindComputeBuffer(1, m_planetParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(2, bodies, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(3, m_collidableBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(4, m_residentPlanetBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(5, pairs, irr::video::EHBT_SHADER_RESOURCE);
+	if (m_hullBuffer)
+	{
+		m_driver->bindComputeBuffer(6, m_hullBuffer, irr::video::EHBT_SHADER_RESOURCE);
+		m_driver->bindComputeBuffer(7, m_vertexBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	}
+	if (m_childShapeBuffer && !m_cpuChildShapes.empty())
+		m_driver->bindComputeBuffer(8, m_childShapeBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(0, m_contactBuffer, irr::video::EHBT_COMPUTE);
+	// The convex pass owns the counter; resetting it here would silently delete its contacts.
+	if (resetCounter)
+		m_driver->resetStructureCount(m_contactBuffer, 0);
+	m_driver->dispatchComputeShaderIndirect(m_dispatch->getArgsBuffer(), 0);
+	m_driver->copyStructureCount(m_contactCountBuffer, 0, m_contactBuffer);
+	m_driver->unbindComputeResources();
+
+	m_driver->computeBarrier(m_contactBuffer);
+	return true;
 }
 
 bool b3IrrlichtNarrowphase::computePlanetContacts(

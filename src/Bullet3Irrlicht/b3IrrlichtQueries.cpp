@@ -2,6 +2,7 @@
 #include "b3IrrlichtLbvh.h"
 #include "b3IrrlichtNarrowphase.h"
 #include "b3IrrlichtGpuBuffers.h"
+#include "b3IrrPlanetNoiseParams.h"
 
 #include <irrlicht.h>
 #include "ComputeBuffer.h"
@@ -16,9 +17,25 @@ struct QueryParams
 	int rootIndex;
 	unsigned int useOwnerFilter;
 	unsigned int numBodies;
+	unsigned int useMargins;
+	unsigned int pad0;
+	unsigned int pad1;
+	unsigned int pad2;
 };
 
-static_assert(sizeof(QueryParams) == 16, "QueryParams must match the HLSL struct stride");
+// Mirrors PlanetQueryParams in B3PlanetQueries.hlsl - 16 bytes.
+struct PlanetQueryParams
+{
+	unsigned int numRays;
+	unsigned int planetEntry;
+	unsigned int maxTriangles;
+	unsigned int pad0;
+};
+
+static_assert(sizeof(QueryParams) == 32, "QueryParams must match the HLSL struct stride");
+static_assert(sizeof(PlanetQueryParams) == 16, "PlanetQueryParams must match the HLSL struct stride");
+static_assert(sizeof(b3IrrlichtQueries::b3IrrPlanetRay) == 64, "b3IrrPlanetRay must match the HLSL PlanetQueryRay stride");
+static_assert(sizeof(b3IrrlichtQueries::b3IrrPlanetHit) == 32, "b3IrrPlanetHit must match the HLSL PlanetQueryHit stride");
 static_assert(sizeof(b3IrrlichtQueries::b3IrrQuery) == 48, "b3IrrQuery must match the HLSL b3Query stride");
 static_assert(sizeof(b3IrrlichtQueries::b3IrrQueryHit) == 48, "b3IrrQueryHit must match the HLSL b3QueryHit stride");
 
@@ -27,9 +44,10 @@ const unsigned int WG_SIZE = 64;
 
 b3IrrlichtQueries::b3IrrlichtQueries(irr::video::IVideoDriver* driver)
 	: m_driver(driver), m_doubleSingle(false), m_asyncSupported(false), m_material(-1),
-	  m_ownerRootsDirty(true), m_ownerRootsUploaded(0),
-	  m_paramBuffer(0), m_queryBuffer(0), m_hitBuffer(0), m_ownerRootBuffer(0),
-	  m_submitCount(0)
+	  m_ownerRootsDirty(true), m_ownerRootsUploaded(0), m_marginsDirty(false),
+	  m_paramBuffer(0), m_queryBuffer(0), m_hitBuffer(0), m_ownerRootBuffer(0), m_marginBuffer(0),
+	  m_ignoreBuffer(0), m_planetMaterial(-1), m_planetNoiseParams(0), m_planetParamBuffer(0),
+	  m_planetRayBuffer(0), m_planetHitBuffer(0), m_submitCount(0)
 {
 	for (int i = 0; i < READBACK_SLOTS; ++i)
 	{
@@ -45,6 +63,76 @@ b3IrrlichtQueries::~b3IrrlichtQueries()
 	b3IrrGpu::dropBuffer(m_queryBuffer);
 	b3IrrGpu::dropBuffer(m_hitBuffer);
 	b3IrrGpu::dropBuffer(m_ownerRootBuffer);
+	b3IrrGpu::dropBuffer(m_marginBuffer);
+	b3IrrGpu::dropBuffer(m_ignoreBuffer);
+	b3IrrGpu::dropBuffer(m_planetParamBuffer);
+	b3IrrGpu::dropBuffer(m_planetRayBuffer);
+	b3IrrGpu::dropBuffer(m_planetHitBuffer);
+}
+
+bool b3IrrlichtQueries::initPlanet(irr::io::IFileSystem* fileSystem)
+{
+	if (m_planetMaterial >= 0)
+		return true;
+	if (!m_driver)
+		return false;
+	irr::video::IGPUProgrammingServices* gpu = m_driver->getGPUProgrammingServices();
+	if (!gpu)
+		return false;
+
+	const irr::io::path path = "media/shaders/B3PlanetQueries.hlsl";
+	if (fileSystem && !fileSystem->existFile(path))
+		return false;
+	b3IrrPlanetNoiseParams* params = new b3IrrPlanetNoiseParams();
+	m_planetMaterial = gpu->addComputeShaderFromFile(path, "CSPlanetQuery", irr::video::ECST_CS_5_0, params);
+	params->drop();
+	m_planetNoiseParams = m_planetMaterial >= 0 ? params : 0;
+	return m_planetMaterial >= 0;
+}
+
+void b3IrrlichtQueries::setPlanetNoiseParams(float mTimer, float plates, float rivers, float atmosphereDensity,
+											 float texsize)
+{
+	if (m_planetNoiseParams)
+		m_planetNoiseParams->setValues(mTimer, plates, rivers, atmosphereDensity, texsize);
+}
+
+bool b3IrrlichtQueries::castPlanetRays(irr::scene::IComputeBuffer* planets, unsigned int planetEntry,
+									   const std::vector<b3IrrPlanetRay>& rays, unsigned int maxTriangles,
+									   std::vector<b3IrrPlanetHit>& out)
+{
+	out.clear();
+	if (m_planetMaterial < 0 || !planets)
+		return false;
+	if (rays.empty())
+		return true;
+
+	const unsigned int count = (unsigned int)rays.size();
+	PlanetQueryParams params;
+	params.numRays = count;
+	params.planetEntry = planetEntry;
+	params.maxTriangles = maxTriangles;
+	params.pad0 = 0u;
+	b3IrrGpu::uploadBuffer<PlanetQueryParams>(m_planetParamBuffer, &params, 1);
+	b3IrrGpu::uploadBuffer<b3IrrPlanetRay>(m_planetRayBuffer, &rays[0], count);
+	b3IrrGpu::ensureBuffer<b3IrrPlanetHit>(m_planetHitBuffer, count);
+
+	irr::video::SMaterial mat;
+	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_planetMaterial;
+	m_driver->setMaterial(mat);
+	// t0 is left free: noise2.hlsl declares its texfix sampler there.
+	m_driver->bindComputeBuffer(1, m_planetParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(2, m_planetRayBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(3, planets, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(0, m_planetHitBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((count + WG_SIZE - 1) / WG_SIZE, 1, 1));
+	m_driver->unbindComputeResources();
+	m_driver->computeBarrier(m_planetHitBuffer);
+
+	m_planetHitBuffer->downloadFromGPU();
+	const b3IrrPlanetHit* hits = (const b3IrrPlanetHit*)m_planetHitBuffer->getBufferPointer();
+	out.assign(hits, hits + count);
+	return true;
 }
 
 bool b3IrrlichtQueries::init(irr::io::IFileSystem* fileSystem, bool doubleSingle)
@@ -71,12 +159,20 @@ void b3IrrlichtQueries::setBodyOwnerRoots(const std::vector<int>& roots)
 	m_ownerRootsDirty = true;
 }
 
+void b3IrrlichtQueries::setBodyMargins(const std::vector<float>& margins)
+{
+	m_margins = margins;
+	m_marginsDirty = true;
+}
+
 void b3IrrlichtQueries::beginBatch()
 {
 	m_batch.clear();
+	m_ignore.clear();
 }
 
-unsigned int b3IrrlichtQueries::addRay(const float from[3], const float to[3], int ownerRoot)
+unsigned int b3IrrlichtQueries::addRay(const float from[3], const float to[3], int ownerRoot,
+									   const int* ignoreBodies, unsigned int ignoreCount)
 {
 	b3IrrQuery q;
 	memset(&q, 0, sizeof(q));
@@ -88,14 +184,23 @@ unsigned int b3IrrlichtQueries::addRay(const float from[3], const float to[3], i
 	q.radius = 0.f;
 	q.ownerRoot = ownerRoot;
 	q.kind = QUERY_RAY;
+	q.ignoreOffset = NO_IGNORE;
+	if (ignoreBodies && ignoreCount > 0)
+	{
+		if (ignoreCount > MAX_IGNORE)
+			ignoreCount = MAX_IGNORE;
+		q.ignoreOffset = (unsigned int)m_ignore.size();
+		m_ignore.push_back((int)ignoreCount);
+		m_ignore.insert(m_ignore.end(), ignoreBodies, ignoreBodies + ignoreCount);
+	}
 	m_batch.push_back(q);
 	return (unsigned int)m_batch.size() - 1;
 }
 
 unsigned int b3IrrlichtQueries::addSphereSweep(const float from[3], const float to[3], float radius,
-											   int ownerRoot)
+											   int ownerRoot, const int* ignoreBodies, unsigned int ignoreCount)
 {
-	const unsigned int index = addRay(from, to, ownerRoot);
+	const unsigned int index = addRay(from, to, ownerRoot, ignoreBodies, ignoreCount);
 	m_batch[index].radius = radius;
 	m_batch[index].kind = QUERY_SPHERE;
 	return index;
@@ -148,6 +253,15 @@ bool b3IrrlichtQueries::submit(const b3IrrlichtLbvh& lbvh, const b3IrrlichtNarro
 		m_ownerRootsUploaded = numBodies;
 	}
 
+	const bool useMargins = m_margins.size() == numBodies;
+	if (useMargins && m_marginsDirty)
+	{
+		b3IrrGpu::uploadBuffer<float>(m_marginBuffer, &m_margins[0], numBodies);
+		m_marginsDirty = false;
+	}
+	if (!m_ignore.empty())
+		b3IrrGpu::uploadBuffer<int>(m_ignoreBuffer, &m_ignore[0], (unsigned int)m_ignore.size());
+
 	b3IrrGpu::uploadBuffer<b3IrrQuery>(m_queryBuffer, &m_batch[0], count);
 
 	// A growth drops the hardware buffer and any staging copy still queued on it: drain the other
@@ -178,6 +292,8 @@ bool b3IrrlichtQueries::submit(const b3IrrlichtLbvh& lbvh, const b3IrrlichtNarro
 	params.rootIndex = lbvh.getResidentRootIndex();
 	params.useOwnerFilter = 1u;
 	params.numBodies = numBodies;
+	params.useMargins = useMargins ? 1u : 0u;
+	params.pad0 = params.pad1 = params.pad2 = 0u;
 	b3IrrGpu::uploadBuffer<QueryParams>(m_paramBuffer, &params, 1);
 
 	irr::video::SMaterial mat;
@@ -197,6 +313,11 @@ bool b3IrrlichtQueries::submit(const b3IrrlichtLbvh& lbvh, const b3IrrlichtNarro
 	m_driver->bindComputeBuffer(9, narrowphase.getHullBuffer(), irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(10, narrowphase.getHullFaceBuffer(), irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(11, m_ownerRootBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	// Read only behind useMargins / a query's ignoreOffset, so a null or older buffer is never touched.
+	m_driver->bindComputeBuffer(12, useMargins ? m_marginBuffer : 0, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(13, narrowphase.getHullVertexBuffer(), irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(14, narrowphase.getHullFaceIndexBuffer(), irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(15, m_ignoreBuffer, irr::video::EHBT_SHADER_RESOURCE);
 	m_driver->bindComputeBuffer(0, m_hitBuffer, irr::video::EHBT_COMPUTE);
 	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((count + WG_SIZE - 1) / WG_SIZE, 1, 1));
 	m_driver->unbindComputeResources();

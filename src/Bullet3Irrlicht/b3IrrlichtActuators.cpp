@@ -1,6 +1,7 @@
 #include "b3IrrlichtActuators.h"
 #include "b3IrrlichtGpuBuffers.h"
 #include "b3IrrlichtQueries.h"   // layout contract only - no link dependency
+#include "b3IrrPlanetNoiseParams.h"
 
 #include <irrlicht.h>
 #include "ComputeBuffer.h"
@@ -39,7 +40,20 @@ struct IrrFloat4
 	float x, y, z, w;
 };
 
+// Mirrors PlanetRayParams in B3PlanetActuatorRays.hlsl - 32 bytes.
+struct PlanetRayParams
+{
+	unsigned int numRows;
+	unsigned int numBodies;
+	unsigned int planetBody;
+	unsigned int flags;
+	float uniformGravity[4];
+};
+const unsigned int kPlanetRaysMerge = 1u;
+const unsigned int kPlanetRaysGravityBuffer = 2u;
+
 static_assert(sizeof(ActuatorParams) == 32, "ActuatorParams must match the HLSL struct stride");
+static_assert(sizeof(PlanetRayParams) == 32, "PlanetRayParams must match the HLSL struct stride");
 static_assert(sizeof(IrrFloat4) == 16, "State/InvInertia elements are float4 in HLSL");
 
 const unsigned int kWorkGroup = 64;
@@ -68,7 +82,8 @@ b3IrrActuator blankRow(int kind, int body, int ownerRoot)
 
 b3IrrlichtActuators::b3IrrlichtActuators(irr::video::IVideoDriver* driver)
 	: m_driver(driver), m_doubleSingle(false), m_buildRaysMaterial(-1), m_bruteForceMaterial(-1),
-	  m_applyMaterial(-1), m_foldMaterial(-1), m_paramBuffer(0), m_actuatorBuffer(0), m_stateBuffer(0),
+	  m_applyMaterial(-1), m_foldMaterial(-1), m_planetRayMaterial(-1), m_planetNoiseParams(0),
+	  m_planetBuffer(0), m_planetParamBuffer(0), m_planetBody(-1), m_paramBuffer(0), m_actuatorBuffer(0), m_stateBuffer(0),
 	  m_inertiaBuffer(0), m_externalInertiaBuffer(0), m_gravityBuffer(0), m_ownerBuffer(0), m_rayBuffer(0),
 	  m_hitBuffer(0), m_externalHitBuffer(0), m_deltaBuffer(0), m_bodyBuffer(0), m_residentActuators(0),
 	  m_ownerCount(0), m_uniformGravity(b3MakeVector3(0.f, 0.f, 0.f))
@@ -86,6 +101,7 @@ b3IrrlichtActuators::~b3IrrlichtActuators()
 	dropBuffer(m_hitBuffer);
 	dropBuffer(m_deltaBuffer);
 	dropBuffer(m_bodyBuffer);
+	dropBuffer(m_planetParamBuffer);
 }
 
 bool b3IrrlichtActuators::init(irr::io::IFileSystem* fileSystem, bool doubleSingle)
@@ -108,6 +124,17 @@ bool b3IrrlichtActuators::init(irr::io::IFileSystem* fileSystem, bool doubleSing
 	m_bruteForceMaterial = gpu->addComputeShaderFromFile(path, "CSRayHitsBruteForceAabb", irr::video::ECST_CS_5_0, 0);
 	m_applyMaterial = gpu->addComputeShaderFromFile(path, "CSApplyActuators", irr::video::ECST_CS_5_0, 0);
 	m_foldMaterial = gpu->addComputeShaderFromFile(path, "CSApplyActuatorDeltas", irr::video::ECST_CS_5_0, 0);
+
+	// Optional: the planet provider includes the host game's terrain noise.
+	const irr::io::path planetPath = m_doubleSingle ? "media/shaders/B3PlanetActuatorRaysDS.hlsl" : "media/shaders/B3PlanetActuatorRays.hlsl";
+	if (!fileSystem || fileSystem->existFile(planetPath))
+	{
+		m_planetNoiseParams = new b3IrrPlanetNoiseParams();
+		m_planetRayMaterial = gpu->addComputeShaderFromFile(planetPath, "CSPlanetRayHits", irr::video::ECST_CS_5_0, m_planetNoiseParams);
+		m_planetNoiseParams->drop();
+		if (m_planetRayMaterial < 0)
+			m_planetNoiseParams = 0;
+	}
 
 	return m_buildRaysMaterial >= 0 && m_bruteForceMaterial >= 0 && m_applyMaterial >= 0 && m_foldMaterial >= 0;
 }
@@ -294,7 +321,56 @@ bool b3IrrlichtActuators::stepResident(irr::scene::IComputeBuffer* bodies, unsig
 		return false;
 	if (worldAabbs && !castRaysBruteForceResident(worldAabbs, numBodies))
 		return false;
+	if (m_planetBuffer && m_planetBody >= 0 && !castRaysPlanetResident(bodies, numBodies, worldAabbs != 0))
+		return false;
 	return applyResident(bodies, numBodies, deltaTime, sleepState);
+}
+
+void b3IrrlichtActuators::setPlanetNoiseParams(float mTimer, float plates, float rivers, float atmosphereDensity,
+											   float texsize)
+{
+	if (m_planetNoiseParams)
+		m_planetNoiseParams->setValues(mTimer, plates, rivers, atmosphereDensity, texsize);
+}
+
+bool b3IrrlichtActuators::castRaysPlanetResident(irr::scene::IComputeBuffer* bodies, unsigned int numBodies, bool merge)
+{
+	if (m_planetRayMaterial < 0 || !bodies || numBodies == 0 || !m_planetBuffer || m_planetBody < 0)
+		return false;
+	if (!m_actuatorBuffer || m_residentActuators == 0)
+		return false;
+
+	const irr::u32 rayCount = m_residentActuators * B3_IRR_ACTUATOR_RAYS_PER_ROW;
+	ensureBuffer<b3IrrActuatorRayHit>(m_hitBuffer, rayCount);
+	ensureBuffer<PlanetRayParams>(m_planetParamBuffer, 1);
+	PlanetRayParams p;
+	p.numRows = m_residentActuators;
+	p.numBodies = numBodies;
+	p.planetBody = (unsigned int)m_planetBody;
+	p.flags = (merge ? kPlanetRaysMerge : 0u) | (m_gravityBuffer ? kPlanetRaysGravityBuffer : 0u);
+	p.uniformGravity[0] = m_uniformGravity.getX();
+	p.uniformGravity[1] = m_uniformGravity.getY();
+	p.uniformGravity[2] = m_uniformGravity.getZ();
+	p.uniformGravity[3] = 0.f;
+	memcpy(m_planetParamBuffer->getBufferPointer(), &p, sizeof(p));
+	m_planetParamBuffer->setDirty();
+
+	irr::video::SMaterial mat;
+	mat.MaterialType = (irr::video::E_MATERIAL_TYPE)m_planetRayMaterial;
+	m_driver->setMaterial(mat);
+	// t0 is left free: noise2.hlsl declares its texfix sampler there.
+	m_driver->bindComputeBuffer(1, m_planetParamBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(2, m_actuatorBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	if (m_gravityBuffer)
+		m_driver->bindComputeBuffer(3, m_gravityBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(4, m_planetBuffer, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(5, bodies, irr::video::EHBT_SHADER_RESOURCE);
+	m_driver->bindComputeBuffer(0, m_hitBuffer, irr::video::EHBT_COMPUTE);
+	m_driver->dispatchComputeShaderBound(irr::core::vector3d<irr::u32>((rayCount + kWorkGroup - 1) / kWorkGroup, 1, 1));
+	m_driver->unbindComputeResources();
+
+	m_driver->computeBarrier(m_hitBuffer);
+	return true;
 }
 
 bool b3IrrlichtActuators::applyActuators(std::vector<b3RigidBodyData>& bodies,
@@ -363,6 +439,17 @@ b3IrrActuator b3IrrlichtActuators::makeRotationWheel(int body, const float* torq
 	for (int i = 0; i < 3; ++i)
 		a.torqueLocal[i] = torqueLocal ? torqueLocal[i] : 0.f;
 	a.params0[3] = throttle;
+	return a;
+}
+
+b3IrrActuator b3IrrlichtActuators::makeImpulse(int body, const float* linearImpulse, const float* torqueImpulse)
+{
+	b3IrrActuator a = blankRow(B3_IRR_ACTUATOR_IMPULSE, body, body);
+	for (int i = 0; i < 3; ++i)
+	{
+		a.thrustLocal[i] = linearImpulse ? linearImpulse[i] : 0.f;
+		a.torqueLocal[i] = torqueImpulse ? torqueImpulse[i] : 0.f;
+	}
 	return a;
 }
 

@@ -5,59 +5,16 @@
 // One thread per row; deltas accumulate as fixed-point ints (InterlockedAdd) so rows on one body
 // sum bit-exactly, while a row's own impulses update its local velocity copy in CPU order.
 
+#ifndef B3_ACTUATORS_BODY_HLSLI
+#define B3_ACTUATORS_BODY_HLSLI
+
 #include "B3Precision.hlsli"
+#include "B3ActuatorRays.hlsli"
 
 #define WG_SIZE 64
 #define FIXED_SCALE 65536.0
-#define RAYS_PER_ROW 4
-
-#define KIND_THRUSTER 0
-#define KIND_ROTATION_WHEEL 1
-#define KIND_HOVER 2
-#define KIND_WALKER 3
-#define KIND_WHEEL 4
-#define KIND_NAVAL 5
-
-#define FLAG_ENABLED 1
-#define FLAG_TRACKED 2
-#define FLAG_FRONT_WHEEL 4
-#define FLAG_WHEEL_COUNT_SHIFT 8
 
 #define B3_ASLEEP_BIT 0x80000000u
-
-// Layout contract: bullet3MT/src/Bullet3Irrlicht/b3IrrActuator.h (80 bytes, static_asserted).
-struct b3IrrActuator
-{
-	int kind;
-	int body;
-	int ownerRoot;
-	int flags;
-	float4 thrustLocal;
-	float4 torqueLocal;
-	float4 params0;
-	float4 params1;
-};
-
-// Same layout as B3QueriesBody.hlsli's b3Query (radius 0, kind 0 = ray); `active` rides in its pad.
-struct b3IrrActuatorRay
-{
-	float4 from;
-	float4 to;
-	float radius;
-	int ownerRoot;
-	uint kind;
-	uint active;
-};
-
-struct b3IrrActuatorRayHit
-{
-	float4 hitPoint;    // w = fraction along from->to
-	float4 hitNormal;
-	int body;
-	int hit;
-	int pad0;
-	int pad1;
-};
 
 struct ActuatorParams
 {
@@ -88,12 +45,6 @@ RWStructuredBuffer<uint> WakeState : register(u3);
 RWStructuredBuffer<b3IrrActuatorRay> RaysOut : register(u4);
 RWStructuredBuffer<b3IrrActuatorRayHit> RayHitsOut : register(u5);
 
-float3 quatRotate(float4 q, float3 v)
-{
-	const float3 qv = q.xyz;
-	return v + 2.f * cross(qv, cross(qv, v) + q.w * v);
-}
-
 float3 quatRotateInv(float4 q, float3 v)
 {
 	return quatRotate(float4(-q.xyz, q.w), v);
@@ -117,17 +68,22 @@ float3 bodyPosF(b3RigidBodyData b)
 #endif
 }
 
-// The 1/65536 truncation deadband is shared with the contact solver; see B3SolveContactsBody.
+// Rounded like B3SolveJointsBody's toFixed: truncation shaved a sustained thrust by up to 1/65536 m/s per step.
+int actuatorFixed(float v)
+{
+	return (int)clamp(round(v * FIXED_SCALE), -2.0e9, 2.0e9);
+}
+
 void atomicAddVel(uint bodyIndex, float3 dLin, float3 dAng)
 {
 	const uint base = bodyIndex * 6;
 	int ignored;
-	InterlockedAdd(VelocityDelta[base + 0], (int)(dLin.x * FIXED_SCALE), ignored);
-	InterlockedAdd(VelocityDelta[base + 1], (int)(dLin.y * FIXED_SCALE), ignored);
-	InterlockedAdd(VelocityDelta[base + 2], (int)(dLin.z * FIXED_SCALE), ignored);
-	InterlockedAdd(VelocityDelta[base + 3], (int)(dAng.x * FIXED_SCALE), ignored);
-	InterlockedAdd(VelocityDelta[base + 4], (int)(dAng.y * FIXED_SCALE), ignored);
-	InterlockedAdd(VelocityDelta[base + 5], (int)(dAng.z * FIXED_SCALE), ignored);
+	InterlockedAdd(VelocityDelta[base + 0], actuatorFixed(dLin.x), ignored);
+	InterlockedAdd(VelocityDelta[base + 1], actuatorFixed(dLin.y), ignored);
+	InterlockedAdd(VelocityDelta[base + 2], actuatorFixed(dLin.z), ignored);
+	InterlockedAdd(VelocityDelta[base + 3], actuatorFixed(dAng.x), ignored);
+	InterlockedAdd(VelocityDelta[base + 4], actuatorFixed(dAng.y), ignored);
+	InterlockedAdd(VelocityDelta[base + 5], actuatorFixed(dAng.z), ignored);
 }
 
 float3 safeVec(float3 v)
@@ -221,6 +177,13 @@ void actuateRotationWheel(b3IrrActuator a, b3RigidBodyData body, uint bi, float 
 	applyTorqueImpulse(v, bi, body.quat, quatRotate(body.quat, a.torqueLocal.xyz) * a.params0.w * dt);
 }
 
+//! btRigidBody::applyCentralImpulse + applyTorqueImpulse, world frame, once per step.
+void actuateImpulse(b3IrrActuator a, b3RigidBodyData body, uint bi, inout RowVel v)
+{
+	applyCentralImpulse(v, body.invMass, a.thrustLocal.xyz);
+	applyTorqueImpulse(v, bi, body.quat, a.torqueLocal.xyz);
+}
+
 //! HoverWalkerDrive::updateAction.
 void actuateHover(uint row, b3IrrActuator a, b3RigidBodyData body, uint bi, float dt, float3 gravity,
 				  inout RowVel v, inout float4 state)
@@ -252,7 +215,6 @@ void actuateHover(uint row, b3IrrActuator a, b3RigidBodyData body, uint bi, floa
 	if (walker && commanded)
 		gaitPhase += 1.f / gaitPeriod;
 
-	const float3 pos = bodyPosF(body);
 	int contacts = 0;
 	[unroll]
 	for (int k = 0; k < 4; ++k)
@@ -273,8 +235,8 @@ void actuateHover(uint row, b3IrrActuator a, b3RigidBodyData body, uint bi, floa
 
 		const float3 corner = float3((k & 1) ? cornerX : -cornerX, castY, (k & 2) ? -cornerZ : cornerZ);
 		const float3 rWorld = quatRotate(body.quat, corner);
-		const float3 from = pos + rWorld;
-		const float distance = length(hit.hitPoint.xyz - from);
+		// From the fraction, not |hitPoint - from|: at planet radius that difference is f32-quantised to 0.5 m.
+		const float distance = hit.hitPoint.w * targetDistance * 2.f;
 		const float error = targetDistance - distance;
 		const float3 cornerVel = v.lin + cross(v.ang, rWorld);
 		float force = (mass / 4.f) * (stiffness * error - damping * dot(cornerVel, up));
@@ -350,7 +312,6 @@ void actuateWheel(uint row, b3IrrActuator a, b3RigidBodyData body, uint bi, floa
 	const float mass = 1.f / body.invMass;
 	const float gMag = max(length(gravity), 1.f);
 	const float4 q = body.quat;
-	const float3 pos = bodyPosF(body);
 	const float3 localUpWorld = quatRotate(q, float3(0.f, 1.f, 0.f));
 
 	// Bullet's km/h speed is |v| signed by heading; the governors use its magnitude.
@@ -398,19 +359,19 @@ void actuateWheel(uint row, b3IrrActuator a, b3RigidBodyData body, uint bi, floa
 	const b3IrrActuatorRayHit hit = RayHits[row * RAYS_PER_ROW];
 	const bool inContact = hit.hit != 0;
 
+	// Hit point kept body-relative from the fraction: an absolute one is f32-quantised at planet radius.
 	float3 contactNormal = -wheelDirWS;
-	float3 contactPoint = pos + quatRotate(q, connCS) + wheelDirWS * raylen;
+	float3 relPos = quatRotate(q, connCS) + wheelDirWS * raylen;
 	float suspLen = restLength;
 	float suspRelVel = 0.f;
 	float clippedInv = 1.f;
 	if (inContact)
 	{
 		contactNormal = hit.hitNormal.xyz;
-		contactPoint = hit.hitPoint.xyz;
+		relPos = quatRotate(q, connCS) + wheelDirWS * (hit.hitPoint.w * raylen);
 		suspLen = clamp(hit.hitPoint.w * raylen - radius, restLength - maxTravel, restLength + maxTravel);
 		const float denominator = dot(contactNormal, wheelDirWS);
-		const float3 relpos = contactPoint - pos;
-		const float projVel = dot(contactNormal, v.lin + cross(v.ang, relpos));
+		const float projVel = dot(contactNormal, v.lin + cross(v.ang, relPos));
 		if (denominator >= -0.1f)
 		{
 			suspRelVel = 0.f;
@@ -432,7 +393,6 @@ void actuateWheel(uint row, b3IrrActuator a, b3RigidBodyData body, uint bi, floa
 		force -= (suspRelVel < 0.f ? dampComp : dampRelax) * suspRelVel;
 		suspForce = max(force * mass, 0.f);
 	}
-	const float3 relPos = contactPoint - pos;
 	applyImpulseAt(v, bi, q, body.invMass, contactNormal * (min(suspForce, maxSuspForce) * dt), relPos);
 
 	// --- updateFriction (ground is Bullet's fixed body, so the partner has no mass terms) ---
@@ -595,30 +555,18 @@ void CSBuildActuatorRays(uint3 tid : SV_DispatchThreadID)
 	// Always a valid read (X4000 treats a conditionally assigned struct as an error).
 	const b3RigidBodyData body = Bodies[enabled ? (uint)a.body : 0u];
 	const float3 pos = bodyPosF(body);
+	const float3 gravity = gravityFor(enabled ? (uint)a.body : 0u, Params[0]);
 
 	[unroll]
 	for (uint k = 0; k < RAYS_PER_ROW; ++k)
 	{
 		b3IrrActuatorRay r = ray;
-		if (enabled && (a.kind == KIND_HOVER || a.kind == KIND_WALKER))
+		float3 offset, dir;
+		float len;
+		if (enabled && actuatorRayLocal(a, body.quat, gravity, k, offset, dir, len))
 		{
-			const float3 gravity = gravityFor(a.body, Params[0]);
-			const float gLen = length(gravity);
-			const float3 up = (gLen * gLen > 1e-12f) ? -gravity / gLen : quatRotate(body.quat, float3(0.f, 1.f, 0.f));
-			const float3 corner = float3((k & 1) ? a.torqueLocal.x : -a.torqueLocal.x, a.torqueLocal.y,
-										 (k & 2) ? -a.torqueLocal.z : a.torqueLocal.z);
-			const float3 from = pos + quatRotate(body.quat, corner);
-			r.from = float4(from, 0.f);
-			r.to = float4(from - up * (a.torqueLocal.w * 2.f), 0.f);
-			r.active = 1u;
-		}
-		else if (enabled && a.kind == KIND_WHEEL && k == 0)
-		{
-			// Wheel rays follow the chassis' own down axis, as btRaycastVehicle does.
-			const float3 from = pos + quatRotate(body.quat, a.torqueLocal.xyz);
-			const float3 down = quatRotate(body.quat, float3(0.f, -1.f, 0.f));
-			r.from = float4(from, 0.f);
-			r.to = float4(from + down * (a.torqueLocal.w + a.params0.x), 0.f);
+			r.from = float4(pos + offset, 0.f);
+			r.to = float4(pos + offset + dir * len, 0.f);
 			r.active = 1u;
 		}
 		RaysOut[row * RAYS_PER_ROW + k] = r;
@@ -726,6 +674,8 @@ void CSApplyActuators(uint3 tid : SV_DispatchThreadID)
 		actuateWheel(row, a, body, bi, dt, gravity, v, state);
 	else if (a.kind == KIND_NAVAL)
 		actuateNaval(a, body, bi, dt, gravity, v, state);
+	else if (a.kind == KIND_IMPULSE)
+		actuateImpulse(a, body, bi, v);
 	else
 		return;
 
@@ -761,3 +711,5 @@ void CSApplyActuatorDeltas(uint3 tid : SV_DispatchThreadID)
 	for (uint i = 0; i < 6; ++i)
 		VelocityDelta[base + i] = 0;
 }
+
+#endif // B3_ACTUATORS_BODY_HLSLI

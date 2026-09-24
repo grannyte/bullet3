@@ -77,6 +77,10 @@ StructuredBuffer<b3IrrJoint> Joints : register(t1);
 StructuredBuffer<float4> InvInertia : register(t2);   // diagonal inverse inertia per body
 // Jacobi splitting weight per joint: 1/(joints touching the busier of its two bodies).
 StructuredBuffer<float> JointScale : register(t3);
+// Bit 31 = asleep, as in B3SolveContactsBody.hlsli; unbound reads 0 (all awake).
+StructuredBuffer<uint> SleepState : register(t4);
+
+#define B3_ASLEEP_BIT 0x80000000u
 
 RWStructuredBuffer<b3RigidBodyData> Bodies : register(u0);
 // 6 ints per body: linear xyz then angular xyz, fixed-point.
@@ -345,13 +349,20 @@ void CSSolveJoints(uint3 tid : SV_DispatchThreadID)
 	if (bodyA >= Params[0].numBodies || bodyB >= Params[0].numBodies || bodyA == bodyB)
 		return;
 
-	const b3RigidBodyData a = Bodies[bodyA];
-	const b3RigidBodyData b = Bodies[bodyB];
+	// A sleeper is immovable, as in CSSolveContacts: its own supports were compacted away, so a real
+	// mass here recoils into a velocity that is never integrated and the awake side sags.
+	b3RigidBodyData a = Bodies[bodyA];
+	b3RigidBodyData b = Bodies[bodyB];
+	if ((SleepState[bodyA] & B3_ASLEEP_BIT) != 0u)
+		a.invMass = 0.f;
+	if ((SleepState[bodyB] & B3_ASLEEP_BIT) != 0u)
+		b.invMass = 0.f;
 	if (a.invMass == 0.f && b.invMass == 0.f)
 		return;
 
-	const float3x3 invIA = worldInvInertia(bodyA, a.quat);
-	const float3x3 invIB = worldInvInertia(bodyB, b.quat);
+	const float3x3 zero3 = float3x3(0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+	const float3x3 invIA = a.invMass == 0.f ? zero3 : worldInvInertia(bodyA, a.quat);
+	const float3x3 invIB = b.invMass == 0.f ? zero3 : worldInvInertia(bodyB, b.quat);
 
 	const float invDt = 1.f / max(Params[0].deltaTime, 1e-6f);
 	const float scale = JointScale[jointIndex];
